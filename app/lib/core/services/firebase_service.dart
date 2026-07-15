@@ -1,0 +1,417 @@
+import 'dart:io';
+import 'package:flutter/foundation.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:uuid/uuid.dart';
+import '../models/message_model.dart';
+import '../models/patient_model.dart';
+import '../models/prescription.dart';
+import '../models/activity_log.dart';
+import '../models/user_role.dart';
+
+class FirebaseService {
+  static final SupabaseClient _db = Supabase.instance.client;
+  static const _uuid = Uuid();
+
+  static String get _ownerId {
+    final user = _db.auth.currentUser;
+    if (user == null) {
+      throw StateError('No signed-in Supabase user');
+    }
+    return user.id;
+  }
+
+  static String get _voiceBucket => 'voice-notes';
+
+  // ─── Auth & Role ─────────────────────────────────────────────────────────────
+  static Future<UserRole?> getCurrentUserRole() async {
+    final user = _db.auth.currentUser;
+    if (user == null) return null;
+    final roleStr = user.userMetadata?['role'] as String?;
+    return roleStr != null ? UserRole.fromString(roleStr) : UserRole.asha;
+  }
+
+  static Future<void> setUserRole(UserRole role) async {
+    await _db.auth.updateUser(
+      UserAttributes(data: {'role': role.value}),
+    );
+  }
+
+  static String getCurrentUserId() => _ownerId;
+  static String getCurrentUserName() => _db.auth.currentUser?.userMetadata?['full_name'] ?? 'User';
+
+  // ─── Audio ───────────────────────────────────────────────────────────────────
+  static Future<String> uploadAudio(File audioFile, String visitId) async {
+    final fileName = '${_uuid.v4()}.m4a';
+    final path = 'voice_notes/$visitId/$fileName';
+    await _db.storage.from(_voiceBucket).upload(
+          path,
+          audioFile,
+          fileOptions: const FileOptions(contentType: 'audio/m4a'),
+        );
+    final signedUrl = await _db.storage
+        .from(_voiceBucket)
+        .createSignedUrl(path, 60 * 60);
+    return signedUrl;
+  }
+
+  // ─── Messages ────────────────────────────────────────────────────────────────
+  static Future<String> saveMessage(
+    String visitId,
+    ChatMessage message, {
+    String? patientId,
+  }) async {
+    final payload = {
+      ...message.toMap(),
+      'patient_id': patientId ?? message.patientId,
+      'visit_id': visitId,
+      'owner_id': _ownerId,
+    };
+    final row = await _db.from('messages').insert(payload).select('id').single();
+    return row['id'] as String;
+  }
+
+  static Future<void> updateMessage(
+      String visitId, String messageId, Map<String, dynamic> data) async {
+    await _db
+        .from('messages')
+        .update(data)
+        .eq('visit_id', visitId)
+        .eq('id', messageId);
+  }
+
+  static Stream<List<ChatMessage>> watchMessages(String visitId) {
+    return _db
+        .from('messages')
+        .stream(primaryKey: ['id'])
+        .eq('visit_id', visitId)
+        .order('timestamp', ascending: false)
+        .map((rows) => rows
+            .map((row) => ChatMessage.fromMap(Map<String, dynamic>.from(row)))
+            .toList());
+  }
+
+  static Stream<List<ChatMessage>> watchPatientMessages(String patientId) {
+    return _db
+        .from('messages')
+        .stream(primaryKey: ['id'])
+        .eq('patient_id', patientId)
+        .order('timestamp', ascending: false)
+        .map((rows) => rows
+            .map((row) => ChatMessage.fromMap(Map<String, dynamic>.from(row)))
+            .toList());
+  }
+
+  static Future<List<ChatMessage>> getPatientMessages(String patientId) async {
+    final rows = await _db
+        .from('messages')
+        .select()
+        .eq('patient_id', patientId)
+        .order('timestamp', ascending: false);
+    return (rows as List)
+        .map((row) => ChatMessage.fromMap(Map<String, dynamic>.from(row)))
+        .toList();
+  }
+
+  // ─── Patients ────────────────────────────────────────────────────────────────
+  static Stream<List<Patient>> watchPatients(String ashaId) {
+    return _db
+        .from('patients')
+        .stream(primaryKey: ['id'])
+        .eq('asha_id', ashaId)
+        .map((rows) {
+      final patients = rows
+          .map((row) => Patient.fromMap(Map<String, dynamic>.from(row)))
+          .toList();
+      patients.sort((a, b) {
+        final aTime = a.lastMessageTime ?? DateTime.fromMillisecondsSinceEpoch(0);
+        final bTime = b.lastMessageTime ?? DateTime.fromMillisecondsSinceEpoch(0);
+        return bTime.compareTo(aTime);
+      });
+      return patients;
+    });
+  }
+
+  static Future<Patient?> getPatient(String patientId) async {
+    final row = await _db.from('patients').select().eq('id', patientId).maybeSingle();
+    if (row == null) return null;
+    return Patient.fromMap(Map<String, dynamic>.from(row));
+  }
+
+  static Future<String> createPatient(Patient patient) async {
+    final payload = patient.toMap();
+    payload['owner_id'] = _ownerId;
+    payload['last_message_time'] ??= DateTime.now().toIso8601String();
+    final row = await _db.from('patients').insert(payload).select('id').single();
+    return row['id'] as String;
+  }
+
+  static Future<void> updatePatient(String patientId,
+      {String? riskCategory, String? lastMessage}) async {
+    final data = <String, dynamic>{
+      'last_message_time': DateTime.now().toIso8601String(),
+    };
+    if (riskCategory != null) data['risk_category'] = riskCategory;
+    if (lastMessage != null) data['last_message'] = lastMessage;
+    await _db.from('patients').update(data).eq('id', patientId);
+  }
+
+  static Stream<List<Patient>> watchAllPatients() {
+    return _db.from('patients').stream(primaryKey: ['id']).map((rows) {
+      final patients =
+          rows.map((row) => Patient.fromMap(Map<String, dynamic>.from(row))).toList();
+      patients.sort((a, b) {
+        final aTime = a.lastMessageTime ?? DateTime.fromMillisecondsSinceEpoch(0);
+        final bTime = b.lastMessageTime ?? DateTime.fromMillisecondsSinceEpoch(0);
+        return bTime.compareTo(aTime);
+      });
+      return patients;
+    });
+  }
+
+  // ─── Visits ──────────────────────────────────────────────────────────────────
+  static Future<String> createVisit(String patientId, String ashaId) async {
+    final row = await _db.from('visits').insert({
+      'owner_id': _ownerId,
+      'patient_id': patientId,
+      'asha_id': ashaId,
+      'created_at': DateTime.now().toIso8601String(),
+      'status': 'active',
+    }).select('id').single();
+    return row['id'] as String;
+  }
+
+  static Future<void> completeVisit(String visitId) async {
+    await _db.from('visits').update({
+      'status': 'completed',
+      'completed_at': DateTime.now().toIso8601String(),
+    }).eq('id', visitId);
+  }
+
+  static Stream<List<Map<String, dynamic>>> watchVisits(String patientId) {
+    return _db
+        .from('visits')
+        .stream(primaryKey: ['id'])
+        .eq('patient_id', patientId)
+        .order('created_at', ascending: false)
+        .map((rows) => rows.map((r) => Map<String, dynamic>.from(r)).toList());
+  }
+
+  static Future<String?> getLatestVisitIdForPatient(String patientId) async {
+    final rows = await _db
+        .from('visits')
+        .select('id, created_at')
+        .eq('patient_id', patientId)
+        .order('created_at', ascending: false)
+        .limit(1);
+    if (rows is List && rows.isNotEmpty) {
+      return rows.first['id'] as String?;
+    }
+    return null;
+  }
+
+  // ─── Triage Reports ──────────────────────────────────────────────────────────
+  static Stream<List<TriageReport>> watchTriageReports() {
+    return _db
+        .from('triage_reports')
+        .stream(primaryKey: ['id'])
+        .order('created_at', ascending: false)
+        .map((rows) => rows
+            .map((row) => TriageReport.fromMap(Map<String, dynamic>.from(row)))
+            .toList());
+  }
+
+  static Stream<List<TriageReport>> watchTriageReportsForPatient(String patientId) {
+    return watchTriageReports().map(
+      (reports) => reports.where((r) => r.patientId == patientId).toList(),
+    );
+  }
+
+  static Future<List<TriageReport>> getTriageReportsForPatient(String patientId) async {
+    final rows = await _db
+        .from('triage_reports')
+        .select()
+        .eq('patient_id', patientId)
+        .order('created_at', ascending: false);
+    return (rows as List)
+        .map((row) => TriageReport.fromMap(Map<String, dynamic>.from(row)))
+        .toList();
+  }
+
+  static Future<void> markReportReviewed(String reportId) async {
+    await _db
+        .from('triage_reports')
+        .update({
+          'reviewed_by_doctor': true,
+          'reviewed_at': DateTime.now().toIso8601String(),
+        })
+        .eq('id', reportId);
+  }
+
+  // ─── Prescriptions ───────────────────────────────────────────────────────────
+  static Future<String> createPrescription(Prescription prescription) async {
+    final payload = prescription.toMap();
+    payload['owner_id'] = _ownerId;
+    final row = await _db
+        .from('prescriptions')
+        .insert(payload)
+        .select('id')
+        .single();
+    await _logActivity(ActivityLog(
+      id: '',
+      userId: _ownerId,
+      userName: getCurrentUserName(),
+      userRole: (await getCurrentUserRole())?.value ?? 'doctor',
+      type: ActivityType.prescriptionCreated,
+      description: 'Created prescription for ${prescription.patientName}',
+      metadata: {'prescriptionId': prescription.id, 'patientId': prescription.patientId},
+      timestamp: DateTime.now(),
+      patientId: prescription.patientId,
+      visitId: prescription.visitId,
+    ));
+    return row['id'] as String;
+  }
+
+  static Future<void> updatePrescription(String prescriptionId,
+      {List<Medication>? medications,
+      String? diagnosis,
+      String? notes,
+      String? followUpInstructions,
+      DateTime? followUpDate,
+      PrescriptionStatus? status}) async {
+    final data = <String, dynamic>{
+      'updated_at': DateTime.now().toIso8601String(),
+    };
+    if (medications != null) data['medications'] = medications.map((m) => m.toMap()).toList();
+    if (diagnosis != null) data['diagnosis'] = diagnosis;
+    if (notes != null) data['notes'] = notes;
+    if (followUpInstructions != null) data['follow_up_instructions'] = followUpInstructions;
+    if (followUpDate != null) data['follow_up_date'] = followUpDate.toIso8601String();
+    if (status != null) data['status'] = status.value;
+    await _db.from('prescriptions').update(data).eq('id', prescriptionId);
+  }
+
+  static Future<Prescription?> getPrescription(String prescriptionId) async {
+    final row = await _db.from('prescriptions').select().eq('id', prescriptionId).maybeSingle();
+    if (row == null) return null;
+    return Prescription.fromMap(Map<String, dynamic>.from(row));
+  }
+
+static Stream<List<Prescription>> watchPrescriptions({
+    String? patientId,
+    String? doctorId,
+  }) {
+    return _db
+        .from('prescriptions')
+        .stream(primaryKey: ['id'])
+        .order('created_at', ascending: false)
+        .map((rows) {
+      var filtered = rows;
+      if (patientId != null) {
+        filtered = filtered.where((r) => r['patient_id'] == patientId).toList();
+      }
+      if (doctorId != null) {
+        filtered = filtered.where((r) => r['doctor_id'] == doctorId).toList();
+      }
+      return filtered
+          .map((row) => Prescription.fromMap(Map<String, dynamic>.from(row)))
+          .toList();
+    });
+  }
+
+  // ─── Activity Logs ───────────────────────────────────────────────────────────
+  static Future<void> _logActivity(ActivityLog activity) async {
+    try {
+      await _db.from('activity_logs').insert(activity.toMap());
+    } catch (e) {
+      // Silently fail - activity logging shouldn't break the app
+      debugPrint('Activity log error: $e');
+    }
+  }
+
+  static Future<void> logActivity(ActivityType type, String description,
+      {Map<String, dynamic>? metadata,
+      String? patientId,
+      String? visitId}) async {
+    final role = await getCurrentUserRole();
+    await _logActivity(ActivityLog(
+      id: '',
+      userId: _ownerId,
+      userName: getCurrentUserName(),
+      userRole: role?.value ?? 'unknown',
+      type: type,
+      description: description,
+      metadata: metadata ?? {},
+      timestamp: DateTime.now(),
+      patientId: patientId,
+      visitId: visitId,
+    ));
+  }
+
+  static Stream<List<ActivityLog>> watchActivityLogs({
+    String? userId,
+    String? userRole,
+    DateTime? startDate,
+    DateTime? endDate,
+    int limit = 100,
+  }) {
+    return _db
+        .from('activity_logs')
+        .stream(primaryKey: ['id'])
+        .order('timestamp', ascending: false)
+        .limit(limit)
+        .map((rows) {
+      var filtered = rows;
+      if (userId != null) {
+        filtered = filtered.where((r) => r['user_id'] == userId).toList();
+      }
+      if (userRole != null && userRole.isNotEmpty) {
+        filtered = filtered.where((r) => r['user_role'] == userRole).toList();
+      }
+      if (startDate != null) {
+        filtered = filtered.where((r) {
+          final ts = DateTime.tryParse(r['timestamp'] ?? '');
+          return ts != null && ts.isAfter(startDate);
+        }).toList();
+      }
+      if (endDate != null) {
+        filtered = filtered.where((r) {
+          final ts = DateTime.tryParse(r['timestamp'] ?? '');
+          return ts != null && ts.isBefore(endDate);
+        }).toList();
+      }
+      return filtered
+          .map((row) => ActivityLog.fromMap(Map<String, dynamic>.from(row)))
+          .toList();
+    });
+  }
+
+  // ─── Reports & Analytics ────────────────────────────────────────────────────
+  static Future<Map<String, dynamic>> getDashboardStats() async {
+    final patients = await _db.from('patients').select('id, risk_category');
+    final visits = await _db.from('visits').select('id, status');
+    final reports = await _db.from('triage_reports').select('id, risk_category, reviewed_by_doctor');
+    final prescriptions = await _db.from('prescriptions').select('id, status');
+
+    return {
+      'totalPatients': patients.length,
+      'patientsByRisk': _groupBy(patients, 'risk_category'),
+      'totalVisits': visits.length,
+      'activeVisits': visits.where((v) => v['status'] == 'active').length,
+      'completedVisits': visits.where((v) => v['status'] == 'completed').length,
+      'totalReports': reports.length,
+      'reportsByRisk': _groupBy(reports, 'risk_category'),
+      'pendingReviews': reports.where((r) => r['reviewed_by_doctor'] != true).length,
+      'totalPrescriptions': prescriptions.length,
+      'activePrescriptions': prescriptions.where((p) => p['status'] == 'active').length,
+    };
+  }
+
+  static Map<String, int> _groupBy(List<Map<String, dynamic>> items, String key) {
+    final map = <String, int>{};
+    for (final item in items) {
+      final val = item[key] ?? 'Unknown';
+      map[val] = (map[val] ?? 0) + 1;
+    }
+    return map;
+  }
+}

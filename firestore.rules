@@ -1,0 +1,117 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ─── Helper Functions ───────────────────────────────────────────────────────
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function hasRole(role) {
+      return isAuthenticated() && getUserData().roles.hasAny([role]);
+    }
+
+    function isAdmin() { return hasRole('admin'); }
+    function isDoctor() { return hasRole('doctor'); }
+    function isAsha() { return hasRole('asha'); }
+
+    function isOwnerAsha(ashaId) {
+      return isAuthenticated() && request.auth.uid == ashaId;
+    }
+
+    // ─── Users ──────────────────────────────────────────────────────────────────
+    match /users/{userId} {
+      allow read: if isAuthenticated() && (request.auth.uid == userId || isAdmin());
+      allow create: if isAuthenticated() && request.auth.uid == userId;
+      allow update: if isAuthenticated() && request.auth.uid == userId;
+      allow delete: if isAdmin();
+    }
+
+    // ─── ASHA Workers ────────────────────────────────────────────────────────────
+    match /asha_workers/{ashaId} {
+      allow read: if isAuthenticated() && (isOwnerAsha(ashaId) || isAdmin() || isDoctor());
+      allow write: if isAdmin();
+    }
+
+    // ─── Patients ────────────────────────────────────────────────────────────────
+    match /patients/{patientId} {
+      // Allow writes from the ASHA Saathi app
+      allow read, write: if request.auth != null && 
+        (request.auth.uid == patientId || 
+         request.auth.token.email?.endsWith('@ashasaathi.ai') ||
+         isAdmin() ||
+         isDoctor());
+    }
+
+    // ─── ASHA Worker Profile ────────────────────────────────────────────────────
+    match /asha_workers/{ashaId} {
+      // ASHA workers can write their own profile
+      allow read, write: if isAuthenticated() && 
+        (request.auth.uid == ashaId || isAdmin());
+    }
+
+    // ─── ASHA Worker Visits ───────────────────────────────────────────────────
+    match /asha_workers/{ashaId}/visits/{visitId} {
+      // ASHA workers can manage their own visits
+      allow read, write: if isAuthenticated() && isAsha() && request.auth.uid == ashaId;
+    }
+
+    // ─── User Profile ────────────────────────────────────────────────────────────
+    match /users/{userId} {
+      allow read: if isAuthenticated() && (request.auth.uid == userId || isAdmin());
+      allow write: if request.auth != null && (
+        request.auth.uid == userId ||
+        isAdmin()
+      );
+    }
+
+    // ─── Visits ─────────────────────────────────────────────────────────────────
+    match /visits/{visitId} {
+      allow read, write: if true;
+
+      // Realtime subcollection messages under visits
+      match /messages/{messageId} {
+        allow read, write: if true;
+      }
+    }
+
+    // ─── Triage Reports ──────────────────────────────────────────────────────────
+    match /triage_reports/{reportId} {
+      allow read, write: if true;
+    }
+
+    // ─── Risk Reports ────────────────────────────────────────────────────────────
+    match /risk_reports/{reportId} {
+      allow read: if isAuthenticated();
+      allow write: if true; // Allow client/backend updates
+    }
+
+    // ─── Doctor Alerts ───────────────────────────────────────────────────────────
+    match /doctor_alerts/{alertId} {
+      allow read, write: if true;
+    }
+
+    // ─── Emergency Events ────────────────────────────────────────────────────────
+    match /emergency_events/{eventId} {
+      allow read: if isAuthenticated();
+      allow write: if true;
+    }
+
+    // ─── Notifications ───────────────────────────────────────────────────────────
+    match /notifications/{notifId} {
+      allow read: if isAuthenticated() && resource.data.recipient_uid == request.auth.uid;
+      allow write: if true;
+    }
+
+    // ─── Audit Logs ──────────────────────────────────────────────────────────────
+    match /audit_logs/{logId} {
+      allow read: if isAdmin();
+      allow write: if true;
+    }
+  }
+}

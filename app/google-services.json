@@ -1,0 +1,39 @@
+{
+  "project_info": {
+    "project_number": "119182854205",
+    "project_id": "asha-saathi-ai",
+    "storage_bucket": "asha-saathi-ai.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:119182854205:android:30bcec2b46564c136e0254",
+        "android_client_info": {
+          "package_name": "com.asha.saathi"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "119182854205-m57a2cd9tfa1369soimsjcvfer8jnu8c.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDQ1zJjgT-ZCqL4szZGo1kUAPHpufsjedU"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "119182854205-m57a2cd9tfa1369soimsjcvfer8jnu8c.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

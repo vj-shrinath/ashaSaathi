@@ -1,0 +1,104 @@
+import 'message_model.dart';
+
+class Patient {
+  final String id;
+  final String name;
+  final int age;
+  final String village;
+  final String? registerType;
+  final String ashaId;
+  final String riskCategory;
+  final String? lastMessage;
+  final DateTime? lastMessageTime;
+  final String? photoUrl;
+
+  Patient({
+    required this.id,
+    required this.name,
+    required this.age,
+    required this.village,
+    this.registerType,
+    required this.ashaId,
+    this.riskCategory = 'Green',
+    this.lastMessage,
+    this.lastMessageTime,
+    this.photoUrl,
+  });
+
+  factory Patient.fromMap(Map<String, dynamic> data) {
+    return Patient(
+      id: data['id'] ?? '',
+      name: data['name'] ?? 'Unknown',
+      age: (data['age'] ?? 0) is int
+          ? data['age']
+          : (data['age'] as num).toInt(),
+      village: data['village'] ?? '',
+      registerType: data['register_type'] ?? data['registerType'],
+      ashaId: data['asha_id'] ?? data['ashaId'] ?? '',
+      riskCategory: data['risk_category'] ?? data['riskCategory'] ?? 'Green',
+      lastMessage: data['last_message'] ?? data['lastMessage'],
+      lastMessageTime: data['last_message_time'] != null
+          ? DateTime.tryParse(data['last_message_time'].toString())
+          : (data['lastMessageTime'] is DateTime
+              ? data['lastMessageTime']
+              : null),
+      photoUrl: data['photo_url'] ?? data['photoUrl'],
+    );
+  }
+
+  Map<String, dynamic> toMap() => {
+        'name': name,
+        'age': age,
+        'village': village,
+        'register_type': registerType,
+        'asha_id': ashaId,
+        'risk_category': riskCategory,
+        'last_message': lastMessage,
+        'last_message_time': lastMessageTime?.toIso8601String(),
+        'photo_url': photoUrl,
+      };
+}
+
+class TriageReport {
+  final String id;
+  final String visitId;
+  final String patientId;
+  final String patientName;
+  final String ashaId;
+  final String ashaName;
+  final String transcript;
+  final TriageResult triageResult;
+  final DateTime createdAt;
+  final bool reviewedByDoctor;
+
+  TriageReport({
+    required this.id,
+    required this.visitId,
+    required this.patientId,
+    required this.patientName,
+    required this.ashaId,
+    required this.ashaName,
+    required this.transcript,
+    required this.triageResult,
+    required this.createdAt,
+    this.reviewedByDoctor = false,
+  });
+
+  factory TriageReport.fromMap(Map<String, dynamic> data) {
+    final rawResult = data['triage_result'] ?? data['triageResult'] ?? {};
+    return TriageReport(
+      id: data['id'] ?? '',
+      visitId: data['visit_id'] ?? data['visitId'] ?? '',
+      patientId: data['patient_id'] ?? data['patientId'] ?? '',
+      patientName: data['patient_name'] ?? data['patientName'] ?? 'Unknown',
+      ashaId: data['asha_id'] ?? data['ashaId'] ?? '',
+      ashaName: data['asha_name'] ?? data['ashaName'] ?? 'ASHA Worker',
+      transcript: data['transcript'] ?? '',
+      triageResult: TriageResult.fromMap(Map<String, dynamic>.from(rawResult)),
+      createdAt: data['created_at'] != null
+          ? DateTime.tryParse(data['created_at'].toString()) ?? DateTime.now()
+          : DateTime.now(),
+      reviewedByDoctor: data['reviewed_by_doctor'] ?? data['reviewedByDoctor'] ?? false,
+    );
+  }
+}
