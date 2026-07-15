@@ -2,6 +2,8 @@
 .env
 .env.local
 .env.production
+app/.env
+backend/.env
 backend/serviceAccountKey.json
 backend/*.json.key
 

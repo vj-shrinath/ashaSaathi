@@ -2,4 +2,5 @@ node_modules/
 dist/
 .env
 serviceAccountKey.json
+asha-saathi-ai-firebase-adminsdk-fbsvc-204495561e.json
 *.log
