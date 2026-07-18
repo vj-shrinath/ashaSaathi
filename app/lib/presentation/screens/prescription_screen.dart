@@ -28,7 +28,7 @@ class _PrescriptionScreenState extends State<PrescriptionScreen> {
   Patient? _patient;
   bool _isLoading = true;
   bool _isSaving = false;
-  List<Medication> _medications = [];
+  final List<Medication> _medications = [];
 
   @override
   void initState() {

@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../core/models/patient_model.dart';
-import '../../core/models/message_model.dart';
 import '../../core/models/prescription.dart';
 import '../../core/models/activity_log.dart';
 import '../../core/services/firebase_service.dart';

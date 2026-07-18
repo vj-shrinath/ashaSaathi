@@ -13,11 +13,9 @@ import '../../presentation/screens/patient_detail_screen.dart';
 import '../../presentation/screens/doctor_patient_detail_screen.dart';
 import '../../presentation/screens/emergency_screen.dart';
 import '../../presentation/screens/admin_dashboard.dart';
-import '../../presentation/screens/asha_dashboard.dart';
 import '../../presentation/screens/prescription_screen.dart';
 import '../../presentation/screens/activity_log_screen.dart';
 import '../../core/models/user_role.dart';
-import '../../core/services/auth_service.dart';
 
 final appRouter = GoRouter(
   initialLocation: '/splash',

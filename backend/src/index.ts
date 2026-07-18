@@ -4,6 +4,8 @@ import dotenv from 'dotenv';
 import visitRoutes from './routes/visitRoutes';
 import webhookRoutes from './routes/webhookRoutes';
 import emergencyRoutes from './routes/emergencyRoutes';
+import authRoutes from './routes/authRoutes';
+import { tarpitMiddleware } from './middleware/tarpitMiddleware';
 
 dotenv.config();
 
@@ -33,6 +35,11 @@ const allowedOrigins = [
   'http://172.30.*.*',
   'http://172.31.*.*',
 ];
+
+// ─── SECURITY: Tarpit — must be the FIRST middleware registered ───────────────
+// Checks every inbound request against the blacklist and honeypot trap URLs
+// before CORS, parsing, logging, or any route handler runs.
+app.use(tarpitMiddleware);
 
 app.use(cors({
   origin: (origin, callback) => {
@@ -64,6 +71,7 @@ app.get('/health', (_req, res) => {
 app.use('/api/v1/visit', visitRoutes);
 app.use('/api/v1/webhooks', webhookRoutes);
 app.use('/api/v1/emergency', emergencyRoutes);
+app.use('/api/v1/auth', authRoutes);
 
 // Global Error Handler
 app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {

@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:go_router/go_router.dart';
 import '../../core/models/activity_log.dart';
 import '../../core/services/firebase_service.dart';
 

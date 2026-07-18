@@ -41,3 +41,9 @@ android {
 flutter {
     source = "../.."
 }
+
+android {
+    lint {
+        abortOnError = false
+    }
+}

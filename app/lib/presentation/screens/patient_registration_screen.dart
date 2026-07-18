@@ -120,7 +120,7 @@ class _PatientRegistrationScreenState extends State<PatientRegistrationScreen> {
                   controller: _registerScrollController,
                   scrollDirection: Axis.horizontal,
                   itemCount: _registerOptions.length,
-                  separatorBuilder: (_, __) => const SizedBox(width: 10),
+                  separatorBuilder: (_, _) => const SizedBox(width: 10),
                   itemBuilder: (context, index) {
                     final option = _registerOptions[index];
                     final selected = option.key == _selectedRegister;
@@ -185,7 +185,7 @@ class _PatientRegistrationScreenState extends State<PatientRegistrationScreen> {
                   Expanded(
                     flex: 3,
                     child: DropdownButtonFormField<String>(
-                      value: _selectedGender,
+                      initialValue: _selectedGender,
                       decoration: InputDecoration(
                         labelText: 'Gender',
                         border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),

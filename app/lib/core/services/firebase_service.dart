@@ -203,7 +203,7 @@ class FirebaseService {
         .eq('patient_id', patientId)
         .order('created_at', ascending: false)
         .limit(1);
-    if (rows is List && rows.isNotEmpty) {
+    if (rows.isNotEmpty) {
       return rows.first['id'] as String?;
     }
     return null;
