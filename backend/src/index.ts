@@ -62,9 +62,197 @@ app.use((req, _res, next) => {
   next();
 });
 
-// Health Check
-app.get('/health', (_req, res) => {
-  res.status(200).json({ status: 'ok', service: 'ASHA Saathi AI API', version: '1.0.0' });
+// Health Check — HTML for browsers, JSON for API clients
+const startTime = new Date();
+
+app.get('/health', (req, res) => {
+  const uptimeMs = Date.now() - startTime.getTime();
+  const uptimeSecs = Math.floor(uptimeMs / 1000);
+  const hours   = Math.floor(uptimeSecs / 3600);
+  const minutes = Math.floor((uptimeSecs % 3600) / 60);
+  const seconds = uptimeSecs % 60;
+  const uptimeStr = `${hours}h ${minutes}m ${seconds}s`;
+
+  const acceptsHtml = req.headers.accept?.includes('text/html');
+
+  if (!acceptsHtml) {
+    // API clients (curl, Flutter, Postman) get clean JSON
+    res.status(200).json({
+      status: 'ok',
+      service: 'ASHA Saathi AI API',
+      version: '1.0.0',
+      uptime: uptimeStr,
+      timestamp: new Date().toISOString(),
+    });
+    return;
+  }
+
+  // Browsers get a rich HTML status page
+  const now = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
+  res.status(200).send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>ASHA Saathi AI — Service Status</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Inter', sans-serif;
+      background: #0a0e1a;
+      color: #e2e8f0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 2rem;
+    }
+    .card {
+      background: #111827;
+      border: 1px solid #1f2937;
+      border-radius: 20px;
+      padding: 2.5rem;
+      max-width: 560px;
+      width: 100%;
+      box-shadow: 0 25px 50px rgba(0,0,0,0.5);
+    }
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      margin-bottom: 2rem;
+    }
+    .logo {
+      width: 52px; height: 52px;
+      background: linear-gradient(135deg, #6366f1, #8b5cf6);
+      border-radius: 14px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 1.5rem;
+      flex-shrink: 0;
+    }
+    .title { font-size: 1.3rem; font-weight: 700; color: #f1f5f9; }
+    .subtitle { font-size: 0.8rem; color: #64748b; margin-top: 2px; }
+
+    .status-badge {
+      display: inline-flex; align-items: center; gap: 8px;
+      background: rgba(16,185,129,0.12);
+      border: 1px solid rgba(16,185,129,0.3);
+      color: #10b981;
+      padding: 6px 14px;
+      border-radius: 999px;
+      font-size: 0.82rem;
+      font-weight: 600;
+      margin-bottom: 1.8rem;
+    }
+    .dot {
+      width: 8px; height: 8px;
+      background: #10b981;
+      border-radius: 50%;
+      animation: pulse 2s ease-in-out infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.5; transform: scale(0.8); }
+    }
+
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 1.8rem; }
+    .stat {
+      background: #0f172a;
+      border: 1px solid #1e293b;
+      border-radius: 12px;
+      padding: 14px 16px;
+    }
+    .stat-label { font-size: 0.72rem; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px; }
+    .stat-value { font-size: 1.1rem; font-weight: 600; color: #f1f5f9; }
+
+    .endpoints { margin-bottom: 1.8rem; }
+    .endpoints-title { font-size: 0.72rem; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 10px; }
+    .ep {
+      display: flex; align-items: center; gap: 10px;
+      padding: 9px 12px;
+      border-radius: 8px;
+      margin-bottom: 6px;
+      font-size: 0.82rem;
+    }
+    .ep:nth-child(odd) { background: #0f172a; }
+    .method {
+      font-size: 0.68rem; font-weight: 700;
+      padding: 2px 7px; border-radius: 4px;
+      flex-shrink: 0;
+    }
+    .post { background: rgba(99,102,241,0.2); color: #818cf8; }
+    .get  { background: rgba(16,185,129,0.15); color: #34d399; }
+    .path { color: #94a3b8; font-family: 'Courier New', monospace; }
+    .desc { color: #475569; font-size: 0.75rem; margin-left: auto; }
+
+    .footer {
+      text-align: center;
+      font-size: 0.75rem;
+      color: #334155;
+      padding-top: 1.2rem;
+      border-top: 1px solid #1e293b;
+    }
+    .footer a { color: #6366f1; text-decoration: none; }
+
+    @media (max-width: 480px) {
+      .grid { grid-template-columns: 1fr; }
+      .desc { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="header">
+      <div class="logo">🌿</div>
+      <div>
+        <div class="title">ASHA Saathi AI</div>
+        <div class="subtitle">Backend API Service · v1.0.0</div>
+      </div>
+    </div>
+
+    <div class="status-badge">
+      <div class="dot"></div>
+      All Systems Operational
+    </div>
+
+    <div class="grid">
+      <div class="stat">
+        <div class="stat-label">Uptime</div>
+        <div class="stat-value">${uptimeStr}</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">Environment</div>
+        <div class="stat-value">Production</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">Region</div>
+        <div class="stat-value">Singapore</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">Last checked</div>
+        <div class="stat-value" style="font-size:0.82rem">${now}</div>
+      </div>
+    </div>
+
+    <div class="endpoints">
+      <div class="endpoints-title">API Endpoints</div>
+      <div class="ep"><span class="method post">POST</span><span class="path">/api/v1/auth/register-worker</span><span class="desc">Register</span></div>
+      <div class="ep"><span class="method post">POST</span><span class="path">/api/v1/auth/verify-sync-token</span><span class="desc">Device sync</span></div>
+      <div class="ep"><span class="method post">POST</span><span class="path">/api/v1/auth/admin/generate-sync-token</span><span class="desc">Admin</span></div>
+      <div class="ep"><span class="method post">POST</span><span class="path">/api/v1/visit/</span><span class="desc">Visits</span></div>
+      <div class="ep"><span class="method get">GET</span><span class="path">/health</span><span class="desc">This page</span></div>
+    </div>
+
+    <div class="footer">
+      Deployed on <a href="https://render.com" target="_blank">Render</a> · 
+      Built with Node.js + TypeScript · 
+      <a href="https://supabase.com" target="_blank">Supabase</a>
+    </div>
+  </div>
+</body>
+</html>`);
 });
 
 // Routes
