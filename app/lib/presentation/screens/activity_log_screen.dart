@@ -30,8 +30,6 @@ class _ActivityLogScreenState extends State<ActivityLogScreen>
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-
     return Scaffold(
       appBar: AppBar(
         backgroundColor: const Color(0xFF6A1B9A),
@@ -80,29 +78,28 @@ class _ActivityLogScreenState extends State<ActivityLogScreen>
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            ListTile(
-              title: const Text('All Roles'),
-              leading: Radio<String>(
-                value: 'all',
-                groupValue: _selectedRole,
-                onChanged: (v) => setState(() => _selectedRole = v!),
-              ),
-            ),
-            ListTile(
-              title: const Text('ASHA Workers'),
-              leading: Radio<String>(
-                value: 'asha',
-                groupValue: _selectedRole,
-                onChanged: (v) => setState(() => _selectedRole = v!),
-              ),
-            ),
-            ListTile(
-              title: const Text('Doctors'),
-              leading: Radio<String>(
-                value: 'doctor',
-                groupValue: _selectedRole,
-                onChanged: (v) => setState(() => _selectedRole = v!),
-              ),
+            Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                RadioListTile<String>(
+                  title: const Text('All Roles'),
+                  value: 'all',
+                  groupValue: _selectedRole,
+                  onChanged: (v) => setState(() => _selectedRole = v!),
+                ),
+                RadioListTile<String>(
+                  title: const Text('ASHA Workers'),
+                  value: 'asha',
+                  groupValue: _selectedRole,
+                  onChanged: (v) => setState(() => _selectedRole = v!),
+                ),
+                RadioListTile<String>(
+                  title: const Text('Doctors'),
+                  value: 'doctor',
+                  groupValue: _selectedRole,
+                  onChanged: (v) => setState(() => _selectedRole = v!),
+                ),
+              ],
             ),
             const Divider(),
             ListTile(

@@ -3,6 +3,7 @@ import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../core/models/activity_log.dart';
 import '../../core/services/firebase_service.dart';
+import '../../core/services/backend_api_service.dart';
 
 class AdminDashboardScreen extends StatefulWidget {
   const AdminDashboardScreen({super.key});
@@ -18,7 +19,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 4, vsync: this);
+    _tabController = TabController(length: 5, vsync: this);
   }
 
   @override
@@ -29,8 +30,6 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-
     return Scaffold(
       backgroundColor: const Color(0xFFF4F2F8),
       appBar: AppBar(
@@ -56,6 +55,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
             Tab(text: 'ASHA ACTIVITY'),
             Tab(text: 'DOCTOR ACTIVITY'),
             Tab(text: 'ALL LOGS'),
+            Tab(text: 'DEVICE SYNC'),
           ],
         ),
         actions: [
@@ -81,6 +81,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
           _ActivityTab(userRole: 'asha', title: 'ASHA Worker Activity'),
           _ActivityTab(userRole: 'doctor', title: 'Doctor Activity'),
           _AllActivityLogsTab(),
+          const _DeviceSyncTab(),
         ],
       ),
     );
@@ -612,3 +613,227 @@ class _RiskStatCard extends StatelessWidget {
     );
   }
 }
+
+// ─────────────────────────────────────────────────────────────
+// Device Sync Tab — Generate one-time Sync PINs for ASHA workers
+// ─────────────────────────────────────────────────────────────
+class _DeviceSyncTab extends StatefulWidget {
+  const _DeviceSyncTab();
+
+  @override
+  State<_DeviceSyncTab> createState() => _DeviceSyncTabState();
+}
+
+class _DeviceSyncTabState extends State<_DeviceSyncTab> {
+  final _phoneController = TextEditingController();
+  bool _isGenerating = false;
+  String? _generatedPin;
+  String? _error;
+  DateTime? _expiresAt;
+
+  @override
+  void dispose() {
+    _phoneController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _generateSyncCode() async {
+    final phone = _phoneController.text.trim();
+    if (phone.isEmpty || phone.length < 10) {
+      setState(() => _error = 'Enter valid 10-digit phone number');
+      return;
+    }
+
+    setState(() {
+      _isGenerating = true;
+      _error = null;
+      _generatedPin = null;
+      _expiresAt = null;
+    });
+
+    try {
+      final session = Supabase.instance.client.auth.currentSession;
+      if (session == null) {
+        setState(() {
+          _error = 'Admin session expired. Please re-login.';
+          _isGenerating = false;
+        });
+        return;
+      }
+
+      final pin = await BackendApiService.generateSyncToken(
+        phone: phone,
+        adminToken: session.accessToken,
+      );
+
+      setState(() {
+        _generatedPin = pin;
+        _expiresAt = DateTime.now().add(const Duration(minutes: 10));
+        _isGenerating = false;
+      });
+    } catch (e) {
+      setState(() {
+        _error = e.toString().replaceAll('Exception: ', '');
+        _isGenerating = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // Header card
+          Card(
+            elevation: 4,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            child: Padding(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: Colors.amber.withValues(alpha: 0.15),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: const Icon(Icons.sync_rounded, color: Colors.amber, size: 28),
+                      ),
+                      const SizedBox(width: 16),
+                      const Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Device Sync Manager',
+                              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                            ),
+                            SizedBox(height: 4),
+                            Text(
+                              'Generate temporary codes for ASHA workers to transfer their account to a new phone.',
+                              style: TextStyle(fontSize: 12, color: Colors.grey),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 24),
+                  TextField(
+                    controller: _phoneController,
+                    keyboardType: TextInputType.phone,
+                    maxLength: 10,
+                    decoration: InputDecoration(
+                      labelText: 'ASHA Worker Phone Number',
+                      hintText: 'Enter 10-digit mobile number',
+                      counterText: '',
+                      prefixIcon: const Icon(Icons.phone_outlined, color: Color(0xFF6A1B9A)),
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: const BorderSide(color: Color(0xFF6A1B9A), width: 2),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  if (_error != null) ...[
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.red.withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.red.withValues(alpha: 0.3)),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(Icons.error_outline, color: Colors.red[400], size: 20),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(_error!, style: TextStyle(color: Colors.red[700], fontSize: 13)),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                  ],
+                  _isGenerating
+                      ? const Center(child: CircularProgressIndicator(color: Color(0xFF6A1B9A)))
+                      : FilledButton.icon(
+                          onPressed: _generateSyncCode,
+                          icon: const Icon(Icons.vpn_key_rounded),
+                          label: const Text('Generate Sync Code'),
+                          style: FilledButton.styleFrom(
+                            backgroundColor: const Color(0xFF6A1B9A),
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(vertical: 16),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                          ),
+                        ),
+                ],
+              ),
+            ),
+          ),
+          // Generated PIN display
+          if (_generatedPin != null) ...[
+            const SizedBox(height: 24),
+            Card(
+              elevation: 6,
+              color: const Color(0xFF1A1A2E),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  children: [
+                    const Icon(Icons.check_circle_rounded, color: Colors.greenAccent, size: 48),
+                    const SizedBox(height: 12),
+                    const Text(
+                      'Sync Code Generated',
+                      style: TextStyle(color: Colors.white70, fontSize: 14),
+                    ),
+                    const SizedBox(height: 20),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.08),
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(color: Colors.amber.withValues(alpha: 0.4)),
+                      ),
+                      child: Text(
+                        _generatedPin!,
+                        style: const TextStyle(
+                          color: Colors.amber,
+                          fontSize: 42,
+                          fontWeight: FontWeight.bold,
+                          letterSpacing: 12,
+                          fontFamily: 'monospace',
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    if (_expiresAt != null)
+                      Text(
+                        'Expires at ${_expiresAt!.hour.toString().padLeft(2, '0')}:${_expiresAt!.minute.toString().padLeft(2, '0')} (10 minutes)',
+                        style: const TextStyle(color: Colors.white54, fontSize: 12),
+                      ),
+                    const SizedBox(height: 8),
+                    const Text(
+                      'Tell this code to the ASHA worker verbally.\nThey will enter it on their new phone.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: Colors.white38, fontSize: 11),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}

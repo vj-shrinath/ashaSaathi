@@ -1,10 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../core/models/patient_model.dart';
-import '../../core/models/activity_log.dart';
 import '../../core/services/firebase_service.dart';
-import '../../core/models/user_role.dart';
 
 class PatientListScreen extends StatefulWidget {
   const PatientListScreen({super.key});
@@ -49,6 +48,225 @@ class _PatientListScreenState extends State<PatientListScreen>
     );
   }
 
+  void _showAshaProfileDialog() {
+    final user = Supabase.instance.client.auth.currentUser;
+    if (user == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No active session found')),
+      );
+      return;
+    }
+
+    final String name = user.userMetadata?['full_name'] as String? ?? 'ASHA Worker';
+    final String email = user.email ?? 'N/A';
+    final String phone = email.contains('@') ? email.split('@').first : 'N/A';
+    final String role = user.userMetadata?['role'] as String? ?? 'asha';
+    final String userId = user.id;
+
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        final theme = Theme.of(context);
+        final isDark = theme.brightness == Brightness.dark;
+        return Dialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(24.0),
+          ),
+          elevation: 8,
+          child: Container(
+            padding: const EdgeInsets.all(24.0),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(24.0),
+              color: isDark ? const Color(0xFF1F2C34) : Colors.white,
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      'ASHA Saathi Profile',
+                      style: TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.bold,
+                        color: isDark ? Colors.white : const Color(0xFF075E54),
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close_rounded),
+                      onPressed: () => Navigator.pop(context),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                CircleAvatar(
+                  radius: 40,
+                  backgroundColor: const Color(0xFF075E54).withValues(alpha: 0.15),
+                  child: Text(
+                    name.isNotEmpty ? name[0].toUpperCase() : 'A',
+                    style: const TextStyle(
+                      fontSize: 36,
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFF075E54),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  name,
+                  style: TextStyle(
+                    fontSize: 22,
+                    fontWeight: FontWeight.bold,
+                    color: isDark ? Colors.white : Colors.black87,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF25D366).withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.check_circle_rounded, color: Color(0xFF25D366), size: 14),
+                      SizedBox(width: 4),
+                      Text(
+                        'Verified Profile',
+                        style: TextStyle(
+                          color: Color(0xFF075E54),
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 24),
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: isDark ? const Color(0xFF121B22) : const Color(0xFFF8F9FA),
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(
+                      color: isDark ? Colors.white10 : Colors.grey.shade200,
+                    ),
+                  ),
+                  child: Column(
+                    children: [
+                      _buildProfileDetailRow(
+                        context,
+                        icon: Icons.phone_android_rounded,
+                        label: 'WhatsApp/Phone',
+                        value: '+91 $phone',
+                      ),
+                      const Divider(height: 12),
+                      _buildProfileDetailRow(
+                        context,
+                        icon: Icons.badge_outlined,
+                        label: 'Role',
+                        value: role.toUpperCase(),
+                      ),
+                      const Divider(height: 12),
+                      _buildProfileDetailRow(
+                        context,
+                        icon: Icons.fingerprint_rounded,
+                        label: 'Biometric Status',
+                        value: 'Bound to Device',
+                      ),
+                      const Divider(height: 12),
+                      _buildProfileDetailRow(
+                        context,
+                        icon: Icons.vpn_key_outlined,
+                        label: 'Profile ID',
+                        value: userId.length > 12 ? '${userId.substring(0, 12)}...' : userId,
+                        onCopy: () {
+                          Clipboard.setData(ClipboardData(text: userId));
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Profile ID copied to clipboard'),
+                              duration: Duration(seconds: 1),
+                            ),
+                          );
+                        },
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 24),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    onPressed: () => Navigator.pop(context),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF075E54),
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                    child: const Text('Back to Patients'),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildProfileDetailRow(
+    BuildContext context, {
+    required IconData icon,
+    required String label,
+    required String value,
+    VoidCallback? onCopy,
+  }) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    return Row(
+      children: [
+        Icon(icon, size: 20, color: const Color(0xFF075E54)),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 11,
+                  color: isDark ? Colors.white60 : Colors.grey[600],
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                value,
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.bold,
+                  color: isDark ? Colors.white : Colors.black87,
+                ),
+              ),
+            ],
+          ),
+        ),
+        if (onCopy != null) ...[
+          IconButton(
+            icon: const Icon(Icons.copy_rounded, size: 18, color: Color(0xFF075E54)),
+            onPressed: onCopy,
+            constraints: const BoxConstraints(),
+            padding: EdgeInsets.zero,
+          ),
+        ]
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -80,43 +298,25 @@ class _PatientListScreenState extends State<PatientListScreen>
             icon: const Icon(Icons.search_rounded, color: Colors.white),
             onPressed: () {},
           ),
-          PopupMenuButton<UserRole>(
+          PopupMenuButton<String>(
             icon: const Icon(Icons.more_vert_rounded, color: Colors.white),
-            onSelected: (role) {
-              if (role == UserRole.doctor) {
-                context.go('/dashboard/doctor');
-              } else if (role == UserRole.admin) {
-                context.go('/admin');
+            onSelected: (value) {
+              if (value == 'profile') {
+                _showAshaProfileDialog();
               }
             },
             itemBuilder: (context) => [
               const PopupMenuItem(
-                value: UserRole.asha,
+                value: 'profile',
                 child: ListTile(
-                  leading: Icon(Icons.medical_services, color: Color(0xFF2E7D32)),
-                  title: Text('ASHA Worker'),
-                  dense: true,
-                ),
-              ),
-              const PopupMenuItem(
-                value: UserRole.doctor,
-                child: ListTile(
-                  leading: Icon(Icons.local_hospital, color: Color(0xFF0277BD)),
-                  title: Text('Doctor View'),
-                  dense: true,
-                ),
-              ),
-              const PopupMenuItem(
-                value: UserRole.admin,
-                child: ListTile(
-                  leading: Icon(Icons.admin_panel_settings, color: Color(0xFF6A1B9A)),
-                  title: Text('Admin View'),
+                  leading: Icon(Icons.person_rounded, color: Color(0xFF075E54)),
+                  title: Text('My Profile'),
                   dense: true,
                 ),
               ),
               const PopupMenuDivider(),
               PopupMenuItem(
-                value: UserRole.asha,
+                value: 'signout',
                 child: ListTile(
                   leading: const Icon(Icons.logout, color: Colors.red),
                   title: const Text('Sign Out', style: TextStyle(color: Colors.red)),
@@ -170,213 +370,6 @@ class _PatientListScreenState extends State<PatientListScreen>
     );
   }
 
-  void _showAddPatientDialog() {
-    final nameCtrl = TextEditingController();
-    final ageCtrl = TextEditingController();
-    final villageCtrl = TextEditingController();
-    String selectedGender = 'F';
-    bool isSubmitting = false;
-
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setDialogState) => AlertDialog(
-          scrollable: true,
-          insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-          titlePadding: EdgeInsets.zero,
-          title: Container(
-            padding: const EdgeInsets.all(20),
-            decoration: const BoxDecoration(
-              color: Color(0xFF075E54),
-              borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-            ),
-            child: const Row(
-              children: [
-                Icon(Icons.person_add_rounded, color: Colors.white, size: 24),
-                SizedBox(width: 12),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('Add New Patient',
-                        style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold)),
-                    Text('नया मरीज़ जोड़ें',
-                        style: TextStyle(color: Colors.white70, fontSize: 12)),
-                  ],
-                ),
-              ],
-            ),
-          ),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextField(
-                  controller: nameCtrl,
-                  textCapitalization: TextCapitalization.words,
-                  decoration: InputDecoration(
-                    labelText: 'Patient Name *',
-                    hintText: 'e.g. Sunita Devi',
-                    prefixIcon: const Icon(Icons.person_outline),
-                    border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12)),
-                    filled: true,
-                  ),
-                ),
-                const SizedBox(height: 12),
-                Row(
-                  children: [
-                    Expanded(
-                      flex: 2,
-                      child: TextField(
-                        controller: ageCtrl,
-                        keyboardType: TextInputType.number,
-                        decoration: InputDecoration(
-                          labelText: 'Age *',
-                          prefixIcon: const Icon(Icons.cake_outlined),
-                          border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(12)),
-                          filled: true,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      flex: 3,
-                      child: DropdownButtonFormField<String>(
-                        initialValue: selectedGender,
-                        decoration: InputDecoration(
-                          labelText: 'Gender',
-                          prefixIcon: const Icon(Icons.wc_outlined),
-                          border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(12)),
-                          filled: true,
-                        ),
-                        items: const [
-                          DropdownMenuItem(value: 'F', child: Text('Female')),
-                          DropdownMenuItem(value: 'M', child: Text('Male')),
-                          DropdownMenuItem(
-                              value: 'Other', child: Text('Other')),
-                        ],
-                        onChanged: (v) =>
-                            setDialogState(() => selectedGender = v ?? 'F'),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: villageCtrl,
-                  textCapitalization: TextCapitalization.words,
-                  decoration: InputDecoration(
-                    labelText: 'Village / Area *',
-                    hintText: 'e.g. Rampur',
-                    prefixIcon: const Icon(Icons.location_on_outlined),
-                    border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12)),
-                    filled: true,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: isSubmitting ? null : () => Navigator.pop(ctx),
-              child: const Text('Cancel'),
-            ),
-            FilledButton.icon(
-              style: FilledButton.styleFrom(
-                backgroundColor: const Color(0xFF075E54),
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(10)),
-              ),
-              onPressed: isSubmitting
-                  ? null
-                  : () async {
-                      if (nameCtrl.text.trim().isEmpty ||
-                          ageCtrl.text.trim().isEmpty ||
-                          villageCtrl.text.trim().isEmpty) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                              content: Text('Please fill all required fields')),
-                        );
-                        return;
-                      }
-                      setDialogState(() => isSubmitting = true);
-
-                      try {
-                        final ashaId = _ashaId;
-                        if (ashaId == null) {
-                          throw StateError('No signed-in Supabase user');
-                        }
-
-                        // 1. Create patient in Supabase
-                        final patient = Patient(
-                          id: '',
-                          name: nameCtrl.text.trim(),
-                          age: int.tryParse(ageCtrl.text) ?? 0,
-                          village: villageCtrl.text.trim(),
-                          ashaId: ashaId,
-                          lastMessage: 'Patient added',
-                          lastMessageTime: DateTime.now(),
-                        );
-                        final patientId =
-                            await FirebaseService.createPatient(patient);
-
-                        // 2. Immediately create a visit session
-                        final visitId = await FirebaseService.createVisit(
-                          patientId,
-                          ashaId,
-                        );
-
-                        // 3. Log activity
-                        await FirebaseService.logActivity(
-                          ActivityType.patientCreated,
-                          'Added new patient: ${patient.name}',
-                          metadata: {
-                            'patientId': patientId,
-                            'visitId': visitId,
-                          },
-                          patientId: patientId,
-                          visitId: visitId,
-                        );
-
-                        if (ctx.mounted) Navigator.pop(ctx);
-
-                        // 4. Auto-navigate to the new patient's chat
-                        if (mounted) {
-                          context.push('/chat/$patientId/$visitId');
-                        }
-                      } catch (e) {
-                        setDialogState(() => isSubmitting = false);
-                        if (context.mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(
-                                content:
-                                    Text('Error adding patient: ${e.toString()}')),
-                          );
-                        }
-                      }
-                    },
-              icon: isSubmitting
-                  ? const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(
-                          strokeWidth: 2, color: Colors.white))
-                  : const Icon(Icons.person_add_rounded, size: 18),
-              label: Text(isSubmitting ? 'Adding...' : 'Add & Open Visit'),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
 }
 
 // ── Patient List Tab ───────────────────────────────────────────────────────────
@@ -1257,20 +1250,6 @@ class _SignedOutState extends StatelessWidget {
   }
 }
 
-class _RegisterOption {
-  final String key;
-  final String label;
-  final IconData icon;
-  final String subtitle;
-
-  const _RegisterOption({
-    required this.key,
-    required this.label,
-    required this.icon,
-    required this.subtitle,
-  });
-}
-
 String _registerLabel(String key) {
   switch (key) {
     case 'pregnancy':
@@ -1290,85 +1269,4 @@ String _registerLabel(String key) {
   }
 }
 
-class _RegisterTypeSelector extends StatelessWidget {
-  final List<_RegisterOption> options;
-  final String selectedKey;
-  final ValueChanged<String> onChanged;
 
-  const _RegisterTypeSelector({
-    required this.options,
-    required this.selectedKey,
-    required this.onChanged,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      height: 120,
-      child: ListView.separated(
-        scrollDirection: Axis.horizontal,
-        itemCount: options.length,
-        separatorBuilder: (_, _) => const SizedBox(width: 10),
-        itemBuilder: (context, index) {
-          final option = options[index];
-          final isSelected = option.key == selectedKey;
-          final theme = Theme.of(context);
-            return InkWell(
-              onTap: () => onChanged(option.key),
-              borderRadius: BorderRadius.circular(18),
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 180),
-                width: 152,
-                padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: isSelected
-                    ? const Color(0xFF075E54).withValues(alpha: 0.12)
-                    : theme.colorScheme.surface,
-                borderRadius: BorderRadius.circular(18),
-                border: Border.all(
-                  color: isSelected
-                      ? const Color(0xFF075E54)
-                      : theme.colorScheme.outline.withValues(alpha: 0.18),
-                  width: 1.2,
-                ),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Icon(option.icon,
-                          color: isSelected
-                              ? const Color(0xFF075E54)
-                              : theme.colorScheme.onSurface.withValues(alpha: 0.65)),
-                      const Spacer(),
-                      if (isSelected)
-                        const Icon(Icons.check_circle, color: Color(0xFF075E54), size: 18),
-                    ],
-                  ),
-                  const Spacer(),
-                  Text(
-                    option.label,
-                    style: theme.textTheme.titleSmall?.copyWith(
-                      fontWeight: FontWeight.w700,
-                      color: isSelected ? const Color(0xFF075E54) : null,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    option.subtitle,
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
-                    ),
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ],
-              ),
-            ),
-          );
-        },
-      ),
-    );
-  }
-}

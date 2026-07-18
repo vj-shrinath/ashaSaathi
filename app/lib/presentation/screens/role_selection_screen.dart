@@ -15,6 +15,11 @@ class _RoleSelectionScreenState extends State<RoleSelectionScreen> {
   SupabaseClient get _supabase => Supabase.instance.client;
 
   Future<void> _selectRole(String role) async {
+    if (_supabase.auth.currentUser == null) {
+      context.go('/auth/login/$role');
+      return;
+    }
+
     setState(() => _isSaving = true);
     await _supabase.auth.updateUser(
       UserAttributes(

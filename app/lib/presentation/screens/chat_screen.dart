@@ -31,9 +31,7 @@ class _ChatScreenState extends State<ChatScreen> {
   String? get _ashaId => Supabase.instance.client.auth.currentUser?.id;
 
   Patient? _patient;
-  String? _activeVisitId;
   bool _isProcessing = false;
-  bool _isRecording = false;
   String? _playingAudioUrl;
 
   @override
@@ -54,7 +52,6 @@ class _ChatScreenState extends State<ChatScreen> {
     if (mounted) {
       setState(() {
         _patient = p;
-        _activeVisitId = widget.visitId;
       });
     }
   }
@@ -201,16 +198,7 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-  void _handleVoiceRecordingStateChange(bool isRecording) {
-    if (!_isProcessing) {
-      setState(() {
-        _isRecording = isRecording;
-        if (!isRecording) {
-          _scrollToBottom();
-        }
-      });
-    }
-  }
+
 
   // ── Play Audio ────────────────────────────────────────────────────────────────
 

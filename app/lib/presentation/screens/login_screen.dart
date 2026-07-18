@@ -1,7 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:uuid/uuid.dart';
+import 'package:flutter_animate/flutter_animate.dart';
 import '../../core/models/user_role.dart';
+import '../../core/services/biometric_auth_service.dart';
+import '../../core/services/backend_api_service.dart';
 
 class LoginScreen extends StatefulWidget {
   final UserRole? forcedRole;
@@ -13,8 +17,18 @@ class LoginScreen extends StatefulWidget {
 }
 
 class _LoginScreenState extends State<LoginScreen> {
+  // Form controllers
+  final _nameController = TextEditingController();
+  final _phoneController = TextEditingController();
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
+
+  // Biometric state variables
+  bool _isBiometricSupported = false;
+  bool _isUsingFallback = false;
+  bool _isRegisteringBiometric = false;
+  String? _registeredName;
+
   bool _isLoading = false;
   String? _error;
   UserRole? _selectedRole;
@@ -38,67 +52,101 @@ class _LoginScreenState extends State<LoginScreen> {
 
   String get _roleDisplayName => _role.displayName;
 
-  String _defaultEmailFor(UserRole role) {
-    switch (role) {
-      case UserRole.asha:
-        return 'test@asha.local';
-      case UserRole.doctor:
-        return 'doctor@asha.local';
-      case UserRole.admin:
-        return 'admin@asha.local';
-    }
+  @override
+  void initState() {
+    super.initState();
+    _initBiometrics();
   }
 
-  String _defaultPasswordFor(UserRole role) {
-    switch (role) {
-      case UserRole.asha:
-        return 'Password123!';
-      case UserRole.doctor:
-        return 'Doctor@12345';
-      case UserRole.admin:
-        return 'Admin@12345';
-    }
-  }
+  Future<void> _initBiometrics() async {
+    final supported = await BiometricAuthService.isBiometricsSupported();
+    final setup = await BiometricAuthService.isRoleBiometricsSetup(_role);
+    final regName = await BiometricAuthService.getRegisteredFullName(_role);
 
-  void _chooseRole(UserRole role) {
+    if (!mounted) return;
+
     setState(() {
-      _selectedRole = role;
-      _error = null;
-      _emailController.text = _defaultEmailFor(role);
-      _passwordController.text = _defaultPasswordFor(role);
+      _isBiometricSupported = true;
+      _registeredName = regName;
+      _isRegisteringBiometric = !setup;
+      _isUsingFallback = !supported;
     });
-  }
 
-  bool _isEmailValidForRole(String email, UserRole role) {
-    final normalized = email.toLowerCase();
-    switch (role) {
-      case UserRole.asha:
-        return normalized == 'test@asha.local' || normalized.contains('asha');
-      case UserRole.doctor:
-        return normalized.contains('doctor');
-      case UserRole.admin:
-        return normalized.contains('admin');
-    }
-  }
-
-  Future<void> _login() async {
-    final email = _emailController.text.trim();
-    final password = _passwordController.text.trim();
-
-    if (email.isEmpty || password.isEmpty) {
-      setState(() => _error = 'Enter email and password');
-      return;
-    }
-
-    if (_selectedRole == null && widget.forcedRole == null) {
-      setState(() => _error = 'Please choose ASHA, Doctor, or Admin first');
-      return;
-    }
-
-    if (!_isEmailValidForRole(email, _role)) {
-      setState(() {
-        _error = 'That email does not belong to $_roleDisplayName';
+    // Auto-trigger biometric challenge if fingerprint is already configured
+    if (setup) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _loginWithBiometrics();
       });
+    }
+  }
+
+  Future<void> _loginWithBiometrics() async {
+    if (_isLoading) return;
+
+    setState(() {
+      _isLoading = true;
+      _error = null;
+    });
+
+    try {
+      final authenticated = await BiometricAuthService.authenticate(
+        localizedReason: 'Scan fingerprint to access your $_roleDisplayName Portal',
+      );
+
+      if (!authenticated) {
+        setState(() {
+          _error = 'Biometric scan failed or cancelled';
+          _isLoading = false;
+        });
+        return;
+      }
+
+      final credentials = await BiometricAuthService.getCredentials(_role);
+      if (credentials == null) {
+        setState(() {
+          _error = 'Credentials not found. Please register fingerprint.';
+          _isRegisteringBiometric = true;
+          _isLoading = false;
+        });
+        return;
+      }
+
+      final response = await _supabase.auth.signInWithPassword(
+        email: credentials['email']!,
+        password: credentials['password']!,
+      );
+
+      if (response.user == null) {
+        setState(() {
+          _error = 'Failed to sign in. User might have been deleted.';
+          _isLoading = false;
+        });
+        return;
+      }
+
+      await _syncAuthRole(_role);
+
+      if (!mounted) return;
+      setState(() => _isLoading = false);
+      context.go(_role.route);
+    } catch (e) {
+      setState(() {
+        _error = 'Fingerprint Lock Error: ${e.toString()}';
+        _isLoading = false;
+      });
+    }
+  }
+
+  Future<void> _registerWithBiometrics() async {
+    final name = _nameController.text.trim();
+    final phone = _phoneController.text.trim();
+
+    if (name.isEmpty) {
+      setState(() => _error = 'Please enter your Full Name');
+      return;
+    }
+    if (phone.isEmpty || phone.length < 10) {
+      setState(() => _error = 'Please enter a valid 10-digit Phone Number');
       return;
     }
 
@@ -108,7 +156,298 @@ class _LoginScreenState extends State<LoginScreen> {
     });
 
     try {
-      // Sign in
+      // 1. Authenticate with fingerprint scanner first to verify biometric setup
+      final authenticated = await BiometricAuthService.authenticate(
+        localizedReason: 'Scan fingerprint to verify biometric lock registration',
+      );
+
+      if (!authenticated) {
+        setState(() {
+          _error = 'Registration cancelled: Fingerprint scan is required';
+          _isLoading = false;
+        });
+        return;
+      }
+
+      // 2. Generate unique email and strong password
+      final generatedEmail = '$phone@gmail.com';
+      final generatedPassword = const Uuid().v4();
+
+      // 3. Register user profile using Node Backend to bypass confirmation email rate limits
+      await BackendApiService.registerWorker(
+        phone: phone,
+        password: generatedPassword,
+        fullName: name,
+        role: _role.name,
+      );
+
+      // 4. Sign in the newly created account
+      final response = await _supabase.auth.signInWithPassword(
+        email: generatedEmail,
+        password: generatedPassword,
+      );
+
+      final currentUser = response.user;
+      if (currentUser == null) {
+        setState(() {
+          _error = 'Account created, but automatic sign in failed.';
+          _isLoading = false;
+        });
+        return;
+      }
+
+      // 5. Save to secure local storage
+      await BiometricAuthService.saveCredentials(
+        email: generatedEmail,
+        password: generatedPassword,
+        role: _role,
+        fullName: name,
+      );
+
+      await _syncAuthRole(_role);
+
+      if (!mounted) return;
+      setState(() {
+        _registeredName = name;
+        _isRegisteringBiometric = false;
+        _isLoading = false;
+      });
+
+      // Redirect user to their role-specific dashboard
+      context.go(_role.route);
+
+    } on AuthException catch (e) {
+      setState(() => _isLoading = false);
+
+      // Supabase returns code 'user_already_exists' or status 422
+      // when the phone/email is already registered on another device.
+      final isUserAlreadyExists =
+          e.statusCode == '422' ||
+          e.message.toLowerCase().contains('user already registered') ||
+          e.message.toLowerCase().contains('already been registered') ||
+          e.message.toLowerCase().contains('already exists');
+
+      if (isUserAlreadyExists) {
+        _showSyncPinDialog(_phoneController.text.trim());
+      } else {
+        setState(() => _error = e.message);
+      }
+
+    } catch (e) {
+      setState(() {
+        _error = 'Registration Error: ${e.toString()}';
+        _isLoading = false;
+      });
+    }
+  }
+
+  /// Shows dialog asking if user wants to sync via Admin PIN
+  void _showSyncPinDialog(String phone) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) {
+        return AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          backgroundColor: const Color(0xFF1A1A2E),
+          title: Row(
+            children: [
+              Icon(Icons.sync_rounded, color: Colors.amber[400]),
+              const SizedBox(width: 12),
+              const Text(
+                'Device Transfer',
+                style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+              ),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'This phone number is already registered on another device.',
+                style: TextStyle(color: Colors.grey[300], fontSize: 14),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                'To transfer your account, ask your Admin for a 6-digit Sync Code.',
+                style: TextStyle(color: Colors.grey[400], fontSize: 13),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel', style: TextStyle(color: Colors.grey)),
+            ),
+            FilledButton.icon(
+              onPressed: () {
+                Navigator.pop(ctx);
+                _showPinEntryDialog(phone);
+              },
+              icon: const Icon(Icons.vpn_key_rounded, size: 18),
+              label: const Text('Enter Code'),
+              style: FilledButton.styleFrom(
+                backgroundColor: Colors.amber[700],
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  /// Shows a dialog to enter the 6-digit sync PIN
+  void _showPinEntryDialog(String phone) {
+    final pinController = TextEditingController();
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) {
+        return AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          backgroundColor: const Color(0xFF1A1A2E),
+          title: const Text(
+            'Enter Sync Code',
+            style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                'Enter the 6-digit code provided by your Admin',
+                style: TextStyle(color: Colors.grey[400], fontSize: 13),
+              ),
+              const SizedBox(height: 20),
+              TextField(
+                controller: pinController,
+                keyboardType: TextInputType.number,
+                maxLength: 6,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 28,
+                  letterSpacing: 12,
+                  fontWeight: FontWeight.bold,
+                ),
+                decoration: InputDecoration(
+                  counterText: '',
+                  hintText: '• • • • • •',
+                  hintStyle: TextStyle(color: Colors.grey[600], fontSize: 28, letterSpacing: 12),
+                  filled: true,
+                  fillColor: Colors.white.withValues(alpha: 0.08),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(16),
+                    borderSide: BorderSide.none,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel', style: TextStyle(color: Colors.grey)),
+            ),
+            FilledButton(
+              onPressed: () {
+                final pin = pinController.text.trim();
+                if (pin.length == 6) {
+                  Navigator.pop(ctx);
+                  _syncDeviceWithPin(phone, pin);
+                }
+              },
+              style: FilledButton.styleFrom(backgroundColor: Colors.green[700]),
+              child: const Text('Verify & Transfer'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  /// Performs the actual device sync using the 6-digit PIN
+  Future<void> _syncDeviceWithPin(String phone, String pin) async {
+    setState(() {
+      _isLoading = true;
+      _error = null;
+    });
+
+    try {
+      // 1. Verify the sync PIN with the backend
+      final syncData = await BackendApiService.verifySyncToken(
+        phone: phone,
+        pin: pin,
+      );
+
+      final tempPassword = syncData['temp_password'] as String;
+      final fullName = syncData['full_name'] as String? ?? 'ASHA Worker';
+      final email = '$phone@gmail.com';
+
+      // 2. Sign in with the temporary credentials
+      final response = await _supabase.auth.signInWithPassword(
+        email: email,
+        password: tempPassword,
+      );
+
+      if (response.user == null) {
+        setState(() {
+          _error = 'Login with sync credentials failed.';
+          _isLoading = false;
+        });
+        return;
+      }
+
+      // 3. Rotate the password to a new permanent one
+      final newPermanentPassword = const Uuid().v4();
+      await _supabase.auth.updateUser(
+        UserAttributes(password: newPermanentPassword),
+      );
+
+      // 4. Save the new credentials to this device's secure storage
+      await BiometricAuthService.saveCredentials(
+        email: email,
+        password: newPermanentPassword,
+        role: _role,
+        fullName: fullName,
+      );
+
+      await _syncAuthRole(_role);
+
+      if (!mounted) return;
+      setState(() {
+        _registeredName = fullName;
+        _isRegisteringBiometric = false;
+        _isLoading = false;
+      });
+
+      // 5. Navigate to the dashboard
+      context.go(_role.route);
+
+    } catch (e) {
+      setState(() {
+        _error = 'Sync failed: ${e.toString()}';
+        _isLoading = false;
+      });
+    }
+  }
+
+  /// Standard fallback email/password login for admin/doctor/testing
+  Future<void> _fallbackLogin() async {
+    final email = _emailController.text.trim();
+    final password = _passwordController.text.trim();
+
+    if (email.isEmpty || password.isEmpty) {
+      setState(() => _error = 'Enter email and password');
+      return;
+    }
+
+    setState(() {
+      _isLoading = true;
+      _error = null;
+    });
+
+    try {
       final response = await _supabase.auth.signInWithPassword(
         email: email,
         password: password,
@@ -122,32 +461,14 @@ class _LoginScreenState extends State<LoginScreen> {
         return;
       }
 
-      final sessionRole = _getUserRoleFromSession(response.user!);
-
-      if (_roleIsLocked && sessionRole != null && sessionRole != _role) {
-        await _supabase.auth.signOut();
-        setState(() {
-          _error = 'This account is registered as ${sessionRole.displayName}, not $_roleDisplayName';
-          _isLoading = false;
-        });
-        return;
-      }
-
-      final effectiveRole = _role;
-
-      // Keep auth metadata aligned with the portal the user selected.
-      await _syncAuthRole(effectiveRole);
+      await _syncAuthRole(_role);
 
       if (!mounted) return;
       setState(() => _isLoading = false);
-      
-      // Navigate to the dashboard for the selected role.
-      context.go(effectiveRole.route);
+      context.go(_role.route);
     } on AuthException {
       setState(() {
-        _error = widget.forcedRole == null
-            ? 'Invalid credentials. Choose your role-specific login if needed.'
-            : 'Invalid credentials for $_roleDisplayName';
+        _error = 'Invalid credentials for $_roleDisplayName';
         _isLoading = false;
       });
     } catch (e) {
@@ -155,17 +476,7 @@ class _LoginScreenState extends State<LoginScreen> {
         _error = 'Error: ${e.toString()}';
         _isLoading = false;
       });
-    } finally {
-      if (mounted && !_isLoading) {
-        setState(() => _isLoading = false);
-      }
     }
-  }
-
-  UserRole? _getUserRoleFromSession(User user) {
-    final roleStr = user.userMetadata?['role'] as String?;
-    if (roleStr == null || roleStr.isEmpty) return null;
-    return UserRole.fromString(roleStr);
   }
 
   Future<void> _syncAuthRole(UserRole role) async {
@@ -179,9 +490,259 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   void dispose() {
+    _nameController.dispose();
+    _phoneController.dispose();
     _emailController.dispose();
     _passwordController.dispose();
     super.dispose();
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // BUILD METHODS
+  // ─────────────────────────────────────────────────────────────
+
+  Widget _buildBiometricLoginFields() {
+    return Column(
+      children: [
+        const SizedBox(height: 16),
+        Text(
+          'Welcome Back${_registeredName != null ? ', $_registeredName' : ''}!',
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            fontSize: 22,
+            fontWeight: FontWeight.bold,
+            color: _roleColor,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          'Place your finger on the scanner to unlock',
+          textAlign: TextAlign.center,
+          style: TextStyle(color: Colors.grey[600], fontSize: 13),
+        ),
+        const SizedBox(height: 32),
+        GestureDetector(
+          onTap: _isLoading ? null : _loginWithBiometrics,
+          child: Container(
+            width: 120,
+            height: 120,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              gradient: LinearGradient(
+                colors: [_roleColor.withValues(alpha: 0.2), _roleColor.withValues(alpha: 0.05)],
+              ),
+              border: Border.all(color: _roleColor.withValues(alpha: 0.3), width: 3),
+            ),
+            child: _isLoading
+                ? Center(child: CircularProgressIndicator(color: _roleColor))
+                : Icon(Icons.fingerprint_rounded, size: 64, color: _roleColor)
+                    .animate(onPlay: (c) => c.repeat(reverse: true))
+                    .scale(begin: const Offset(0.95, 0.95), end: const Offset(1.05, 1.05), duration: 1200.ms)
+                    .then()
+                    .shimmer(duration: 1500.ms, color: _roleColor.withValues(alpha: 0.3)),
+          ),
+        ),
+        const SizedBox(height: 16),
+        TextButton(
+          onPressed: () => _loginWithBiometrics(),
+          child: Text(
+            'Tap to Scan & Unlock',
+            style: TextStyle(color: _roleColor, fontWeight: FontWeight.bold, fontSize: 15),
+          ),
+        ),
+        const SizedBox(height: 24),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            TextButton.icon(
+              onPressed: () {
+                setState(() {
+                  _isRegisteringBiometric = true;
+                });
+              },
+              icon: Icon(Icons.person_add_alt_1_rounded, size: 16, color: Colors.grey[600]),
+              label: Text('Register New Profile', style: TextStyle(color: Colors.grey[600], fontSize: 12)),
+            ),
+            TextButton.icon(
+              onPressed: () {
+                setState(() => _isUsingFallback = true);
+              },
+              icon: Icon(Icons.email_outlined, size: 16, color: Colors.grey[600]),
+              label: Text('Email Login', style: TextStyle(color: Colors.grey[600], fontSize: 12)),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _buildBiometricRegistrationFields() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(
+          'Register Fingerprint Lock',
+          style: TextStyle(
+            fontSize: 20,
+            fontWeight: FontWeight.bold,
+            color: _roleColor,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          'Create your secure biometric profile for $_roleDisplayName portal.',
+          style: TextStyle(color: Colors.grey[600], fontSize: 13),
+        ),
+        const SizedBox(height: 24),
+        TextField(
+          controller: _nameController,
+          textCapitalization: TextCapitalization.words,
+          decoration: InputDecoration(
+            labelText: 'Full Name',
+            hintText: 'e.g. Radha Devi',
+            prefixIcon: Icon(Icons.person_outline, color: _roleColor),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: BorderSide(color: _roleColor, width: 2),
+            ),
+          ),
+        ),
+        const SizedBox(height: 16),
+        TextField(
+          controller: _phoneController,
+          keyboardType: TextInputType.phone,
+          maxLength: 10,
+          decoration: InputDecoration(
+            labelText: 'Phone Number',
+            hintText: '10-digit mobile number',
+            counterText: '',
+            prefixIcon: Icon(Icons.phone_outlined, color: _roleColor),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: BorderSide(color: _roleColor, width: 2),
+            ),
+          ),
+        ),
+        const SizedBox(height: 24),
+        // Animated fingerprint icon
+        Center(
+          child: GestureDetector(
+            onTap: _isLoading ? null : _registerWithBiometrics,
+            child: Container(
+              width: 100,
+              height: 100,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                gradient: LinearGradient(
+                  colors: [_roleColor.withValues(alpha: 0.15), _roleColor.withValues(alpha: 0.05)],
+                ),
+                border: Border.all(color: _roleColor.withValues(alpha: 0.3), width: 2),
+              ),
+              child: _isLoading
+                  ? Center(child: CircularProgressIndicator(color: _roleColor, strokeWidth: 3))
+                  : Icon(Icons.fingerprint_rounded, size: 52, color: _roleColor)
+                      .animate(onPlay: (c) => c.repeat(reverse: true))
+                      .scale(begin: const Offset(0.9, 0.9), end: const Offset(1.1, 1.1), duration: 1200.ms),
+            ),
+          ),
+        ),
+        const SizedBox(height: 16),
+        _isLoading
+            ? const Center(child: Text('Registering...', style: TextStyle(color: Colors.grey)))
+            : FilledButton.icon(
+                onPressed: _registerWithBiometrics,
+                icon: const Icon(Icons.fingerprint_rounded),
+                label: const Text('Scan & Register Profile'),
+                style: FilledButton.styleFrom(
+                  backgroundColor: _roleColor,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+              ),
+        const SizedBox(height: 16),
+        TextButton.icon(
+          onPressed: () {
+            setState(() => _isUsingFallback = true);
+          },
+          icon: Icon(Icons.email_outlined, size: 16, color: Colors.grey[600]),
+          label: Text('Use Email & Password System', style: TextStyle(color: Colors.grey[600], fontSize: 12)),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildFallbackLoginFields() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(
+          '$_roleDisplayName Email Login',
+          style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: _roleColor),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          'Sign in with email and password for $_roleDisplayName portal.',
+          style: TextStyle(color: Colors.grey[600], fontSize: 13),
+        ),
+        const SizedBox(height: 24),
+        TextField(
+          controller: _emailController,
+          keyboardType: TextInputType.emailAddress,
+          decoration: InputDecoration(
+            labelText: 'Email',
+            prefixIcon: Icon(Icons.email_outlined, color: _roleColor),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: BorderSide(color: _roleColor, width: 2),
+            ),
+          ),
+        ),
+        const SizedBox(height: 16),
+        TextField(
+          controller: _passwordController,
+          obscureText: true,
+          decoration: InputDecoration(
+            labelText: 'Password',
+            prefixIcon: Icon(Icons.lock_outline, color: _roleColor),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: BorderSide(color: _roleColor, width: 2),
+            ),
+          ),
+        ),
+        const SizedBox(height: 24),
+        _isLoading
+            ? Center(child: CircularProgressIndicator(color: _roleColor))
+            : FilledButton(
+                onPressed: _fallbackLogin,
+                style: FilledButton.styleFrom(
+                  backgroundColor: _roleColor,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+                child: Text(
+                  'Sign In as $_roleDisplayName',
+                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                ),
+              ),
+        if (_isBiometricSupported) ...[
+          const SizedBox(height: 16),
+          TextButton.icon(
+            onPressed: () {
+              setState(() => _isUsingFallback = false);
+            },
+            icon: Icon(Icons.fingerprint_rounded, size: 18, color: _roleColor),
+            label: Text('Switch to Fingerprint Login', style: TextStyle(color: _roleColor, fontSize: 13)),
+          ),
+        ],
+      ],
+    );
   }
 
   @override
@@ -212,18 +773,18 @@ class _LoginScreenState extends State<LoginScreen> {
                   const SizedBox(height: 40),
                   const Icon(Icons.favorite_rounded, size: 64, color: Colors.white),
                   const SizedBox(height: 16),
-                  Text(
+                  const Text(
                     'ASHA Saathi AI',
                     textAlign: TextAlign.center,
-                    style: const TextStyle(
+                    style: TextStyle(
                       color: Colors.white,
                       fontSize: 28,
                       fontWeight: FontWeight.bold,
                     ),
                   ),
-                          const SizedBox(height: 8),
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                  const SizedBox(height: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
                     decoration: BoxDecoration(
                       color: Colors.white.withValues(alpha: 0.2),
                       borderRadius: BorderRadius.circular(20),
@@ -253,14 +814,20 @@ class _LoginScreenState extends State<LoginScreen> {
                             Text(
                               'Choose your role',
                               style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                                fontWeight: FontWeight.bold,
-                                color: _roleColor,
-                              ),
+                                    fontWeight: FontWeight.bold,
+                                    color: _roleColor,
+                                  ),
                             ),
                             const SizedBox(height: 12),
                             _RoleChooser(
                               selectedRole: _selectedRole,
-                              onSelected: _chooseRole,
+                              onSelected: (role) {
+                                setState(() {
+                                  _selectedRole = role;
+                                  _error = null;
+                                });
+                                _initBiometrics();
+                              },
                             ),
                             const SizedBox(height: 20),
                           ],
@@ -287,144 +854,13 @@ class _LoginScreenState extends State<LoginScreen> {
                             ),
                             const SizedBox(height: 16),
                           ],
-                          Text(
-                            '$_roleDisplayName Portal',
-                            style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                              fontWeight: FontWeight.bold,
-                              color: _roleColor,
-                            ),
-                          ),
-                          const SizedBox(height: 8),
-                          Text(
-                            'Sign in to access your $_roleDisplayName dashboard',
-                            style: TextStyle(
-                              color: Colors.grey[600],
-                              fontSize: 13,
-                            ),
-                          ),
-                          const SizedBox(height: 24),
-                          if (_selectedRole != null || _roleIsLocked) ...[
-                          TextField(
-                            controller: _emailController,
-                            keyboardType: TextInputType.emailAddress,
-                            decoration: InputDecoration(
-                              labelText: 'Email',
-                              prefixIcon: Icon(Icons.email_outlined, color: _roleColor),
-                              border: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              focusedBorder: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(12),
-                                borderSide: BorderSide(color: _roleColor, width: 2),
-                              ),
-                            ),
-                          ),
-                          const SizedBox(height: 16),
-                          TextField(
-                            controller: _passwordController,
-                            obscureText: true,
-                            decoration: InputDecoration(
-                              labelText: 'Password',
-                              prefixIcon: Icon(Icons.lock_outline, color: _roleColor),
-                              border: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              focusedBorder: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(12),
-                                borderSide: BorderSide(color: _roleColor, width: 2),
-                              ),
-                            ),
-                          ),
-                          const SizedBox(height: 24),
-                          ] else ...[
-                            Text(
-                              'Pick a role above to continue to login details.',
-                              style: TextStyle(color: Colors.grey[600]),
-                            ),
-                            const SizedBox(height: 24),
-                          ],
-                          if (widget.forcedRole == null) ...[
-                            Text(
-                              'Choose your portal to sign in with the correct account type.',
-                              style: TextStyle(
-                                color: Colors.grey[600],
-                                fontSize: 13,
-                              ),
-                            ),
-                            const SizedBox(height: 16),
-                          ],
-                          _isLoading
-                              ? Center(
-                                  child: CircularProgressIndicator(color: _roleColor),
-                                )
-                              : FilledButton(
-                                  onPressed: _login,
-                                  style: FilledButton.styleFrom(
-                                    backgroundColor: _roleColor,
-                                    foregroundColor: Colors.white,
-                                    padding: const EdgeInsets.symmetric(vertical: 16),
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(12),
-                                    ),
-                                  ),
-                                  child: Text(
-                                    'Sign In as $_roleDisplayName',
-                                    style: const TextStyle(
-                                      fontSize: 16,
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                  ),
-                                ),
-                          if (widget.forcedRole == null) ...[
-                            const SizedBox(height: 16),
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                Text(
-                                  'Login as different role? ',
-                                  style: TextStyle(color: Colors.grey[600]),
-                                ),
-                                TextButton(
-                                  onPressed: () => context.go('/auth/login/asha'),
-                                  child: Text(
-                                    'ASHA',
-                                    style: TextStyle(
-                                      color: const Color(0xFF2E7D32),
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                  ),
-                                ),
-                                Text(
-                                  ' / ',
-                                  style: TextStyle(color: Colors.grey[400]),
-                                ),
-                                TextButton(
-                                  onPressed: () => context.go('/auth/login/doctor'),
-                                  child: Text(
-                                    'Doctor',
-                                    style: TextStyle(
-                                      color: const Color(0xFF0277BD),
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                  ),
-                                ),
-                                Text(
-                                  ' / ',
-                                  style: TextStyle(color: Colors.grey[400]),
-                                ),
-                                TextButton(
-                                  onPressed: () => context.go('/auth/login/admin'),
-                                  child: Text(
-                                    'Admin',
-                                    style: TextStyle(
-                                      color: const Color(0xFF6A1B9A),
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ],
+                          // Render correct state fields dynamically
+                          if (_isUsingFallback)
+                            _buildFallbackLoginFields()
+                          else if (_isRegisteringBiometric)
+                            _buildBiometricRegistrationFields()
+                          else
+                            _buildBiometricLoginFields(),
                         ],
                       ),
                     ),

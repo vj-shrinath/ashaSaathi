@@ -48,6 +48,10 @@ dependencies:
   record: ^6.2.1
   audioplayers: ^6.4.0
 
+  # Biometric Auth & Secure Storage
+  local_auth: ^2.3.0
+  flutter_secure_storage: ^9.2.4
+
   # UI Enhancements
   lottie: ^3.3.1
   shimmer: ^3.0.0

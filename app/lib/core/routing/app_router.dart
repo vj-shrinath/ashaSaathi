@@ -29,7 +29,8 @@ final appRouter = GoRouter(
     if (onSplash || onOtp) return null;
 
     if (user == null) {
-      return loggingIn ? null : '/auth/login';
+      if (loggingIn || selectingRole) return null;
+      return '/auth/login';
     }
 
     final roleStr = user.userMetadata?['role'] as String?;

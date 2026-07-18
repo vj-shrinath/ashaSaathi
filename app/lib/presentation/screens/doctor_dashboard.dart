@@ -424,48 +424,6 @@ class _PatientFeedPanel extends StatelessWidget {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// TRIAGE REPORTS TAB
-// ─────────────────────────────────────────────────────────────────────────────
-class _TriageReportsTab extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) {
-    return StreamBuilder<List<TriageReport>>(
-      stream: FirebaseService.watchTriageReports(),
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Center(child: CircularProgressIndicator());
-        }
-
-        final reports = snapshot.data ?? [];
-
-        if (reports.isEmpty) {
-          return const _EmptyState(
-            icon: Icons.analytics_outlined,
-            title: 'No Triage Reports',
-            subtitle: 'ASHA worker visits will generate triage reports here',
-          );
-        }
-
-        final latestByPatient = <String, TriageReport>{};
-        for (final report in reports) {
-          latestByPatient.putIfAbsent(report.patientId, () => report);
-        }
-        final grouped = latestByPatient.values.toList()
-          ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
-
-        return ListView.builder(
-          padding: const EdgeInsets.all(12),
-          itemCount: grouped.length,
-          itemBuilder: (context, index) {
-            final report = grouped[index];
-            return _PatientTriageTile(report: report);
-          },
-        );
-      },
-    );
-  }
-}
 
 class _PatientTriageTile extends StatelessWidget {
   final TriageReport report;
