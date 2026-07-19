@@ -515,6 +515,31 @@ router.post('/register-worker', async (req: Request, res: Response): Promise<voi
   const email = buildEmail(phone);
 
   try {
+    if (role === 'admin') {
+      const { data: existingAdmins, error: adminCheckError } = await supabase
+        .from('user_profiles')
+        .select('id')
+        .eq('role', 'admin');
+
+      if (adminCheckError) {
+        res.status(500).json({ status: 'error', message: adminCheckError.message });
+        return;
+      }
+
+      if (existingAdmins && existingAdmins.length > 0) {
+        const { user: existingUser } = await findUserByEmail(email);
+        const isSelfRestoration = existingUser && existingAdmins.some((adm: any) => adm.id === existingUser.id);
+
+        if (!isSelfRestoration) {
+          res.status(403).json({
+            status: 'error',
+            message: 'An administrator account has already been registered on this system. Public admin registration is disabled.'
+          });
+          return;
+        }
+      }
+    }
+
     let resolvedPhcId: string | null = null;
     if (phc_id) {
       const { data: phc, error: phcError } = await supabase
