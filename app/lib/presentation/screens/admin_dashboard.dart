@@ -772,6 +772,7 @@ class _PhcAdminSetupTabState extends State<_PhcAdminSetupTab> {
                   else ...[
                     DropdownButtonFormField<String>(
                       value: _selectedPhcId,
+                      isExpanded: true,
                       items: _phcs
                           .map(
                             (phc) => DropdownMenuItem<String>(
