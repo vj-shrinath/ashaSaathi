@@ -29,6 +29,11 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _isRegisteringBiometric = false;
   bool _needsRecovery = false;
   String? _registeredName;
+  List<Map<String, dynamic>> _phcs = [];
+  List<Map<String, dynamic>> _doctors = [];
+  String? _selectedPhcId;
+  String? _selectedDoctorId;
+  bool _isLoadingOrgData = false;
 
   bool _isLoading = false;
   String? _error;
@@ -60,6 +65,20 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   Future<void> _initBiometrics() async {
+    if (_role == UserRole.admin) {
+      if (!mounted) return;
+      setState(() {
+        _isBiometricSupported = false;
+        _registeredName = null;
+        _isRegisteringBiometric = false;
+        _needsRecovery = false;
+        _isUsingFallback = true;
+        _selectedPhcId = null;
+        _selectedDoctorId = null;
+      });
+      return;
+    }
+
     final supported = await BiometricAuthService.isBiometricsSupported();
     final setup = await BiometricAuthService.isRoleBiometricsSetup(_role);
     final regName = await BiometricAuthService.getRegisteredFullName(_role);
@@ -80,9 +99,50 @@ class _LoginScreenState extends State<LoginScreen> {
         _loginWithBiometrics();
       });
     }
+
+    await _loadOrgData();
+  }
+
+  Future<void> _loadOrgData() async {
+    if (_role == UserRole.admin) return;
+    setState(() => _isLoadingOrgData = true);
+    try {
+      final phcs = await BackendApiService.listPhcs();
+      if (!mounted) return;
+      setState(() {
+        _phcs = phcs;
+        _isLoadingOrgData = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _isLoadingOrgData = false);
+    }
+  }
+
+  Future<void> _loadDoctorsForPhc(String phcId) async {
+    setState(() {
+      _isLoadingOrgData = true;
+      _selectedDoctorId = null;
+      _doctors = [];
+    });
+    try {
+      final doctors = await BackendApiService.listDoctorsByPhc(phcId: phcId);
+      if (!mounted) return;
+      setState(() {
+        _doctors = doctors;
+        _isLoadingOrgData = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _isLoadingOrgData = false);
+    }
   }
 
   Future<void> _loginWithBiometrics() async {
+    if (_role == UserRole.admin) {
+      return;
+    }
+
     if (_isLoading) return;
 
     setState(() {
@@ -140,6 +200,10 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   Future<void> _registerWithBiometrics() async {
+    if (_role == UserRole.admin) {
+      return;
+    }
+
     final name = _nameController.text.trim();
     final phone = _phoneController.text.trim();
 
@@ -149,6 +213,14 @@ class _LoginScreenState extends State<LoginScreen> {
     }
     if (phone.isEmpty || phone.length < 10) {
       setState(() => _error = 'Please enter a valid 10-digit Phone Number');
+      return;
+    }
+    if (_selectedPhcId == null) {
+      setState(() => _error = 'Please select a PHC');
+      return;
+    }
+    if (_role == UserRole.asha && _selectedDoctorId == null) {
+      setState(() => _error = 'Please select a supervising doctor');
       return;
     }
 
@@ -186,6 +258,8 @@ class _LoginScreenState extends State<LoginScreen> {
         password: generatedPassword,
         fullName: name,
         role: _role.name,
+        phcId: _selectedPhcId!,
+        doctorId: _role == UserRole.asha ? _selectedDoctorId : null,
       );
 
       // 4. Sign in the newly created account
@@ -541,6 +615,10 @@ class _LoginScreenState extends State<LoginScreen> {
   // ─────────────────────────────────────────────────────────────
 
   Widget _buildBiometricLoginFields() {
+    if (_role == UserRole.admin) {
+      return _buildFallbackLoginFields();
+    }
+
     return Column(
       children: [
         const SizedBox(height: 16),
@@ -586,30 +664,24 @@ class _LoginScreenState extends State<LoginScreen> {
           ),
         ),
         const SizedBox(height: 16),
-        TextButton(
-          onPressed: () => _loginWithBiometrics(),
-          child: Text(
-            'Tap to Scan & Unlock',
-            style: TextStyle(color: _roleColor, fontWeight: FontWeight.bold, fontSize: 15),
-          ),
-        ),
         const SizedBox(height: 24),
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            TextButton.icon(
-              onPressed: () {
-                setState(() {
-                  _isRegisteringBiometric = true;
-                  _needsRecovery = false;
-                });
-              },
-              icon: Icon(Icons.person_add_alt_1_rounded, size: 16, color: Colors.grey[600]),
-              label: Text(
-                _needsRecovery ? 'Re-register Biometric' : 'Register New Profile',
-                style: TextStyle(color: Colors.grey[600], fontSize: 12),
+            if (_role != UserRole.admin)
+              TextButton.icon(
+                onPressed: () {
+                  setState(() {
+                    _isRegisteringBiometric = true;
+                    _needsRecovery = false;
+                  });
+                },
+                icon: Icon(Icons.person_add_alt_1_rounded, size: 16, color: Colors.grey[600]),
+                label: Text(
+                  _needsRecovery ? 'Re-register Biometric' : 'Register New Profile',
+                  style: TextStyle(color: Colors.grey[600], fontSize: 12),
+                ),
               ),
-            ),
             TextButton.icon(
               onPressed: () {
                 setState(() => _isUsingFallback = true);
@@ -624,6 +696,10 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   Widget _buildBiometricRegistrationFields() {
+    if (_role == UserRole.admin) {
+      return _buildFallbackLoginFields();
+    }
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -674,6 +750,53 @@ class _LoginScreenState extends State<LoginScreen> {
             ),
           ),
         ),
+        const SizedBox(height: 16),
+        _isLoadingOrgData
+            ? const LinearProgressIndicator()
+            : DropdownButtonFormField<String>(
+                value: _selectedPhcId,
+                isExpanded: true,
+                decoration: InputDecoration(
+                  labelText: 'Select PHC',
+                  prefixIcon: Icon(Icons.local_hospital_outlined, color: _roleColor),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+                items: _phcs
+                    .map(
+                      (phc) => DropdownMenuItem<String>(
+                        value: phc['id'] as String,
+                        child: Text('${phc['name']} (${phc['code']})'),
+                      ),
+                    )
+                    .toList(),
+                onChanged: (value) async {
+                  setState(() => _selectedPhcId = value);
+                  if (value != null) {
+                    await _loadDoctorsForPhc(value);
+                  }
+                },
+              ),
+        if (_role == UserRole.asha) ...[
+          const SizedBox(height: 16),
+          DropdownButtonFormField<String>(
+            value: _selectedDoctorId,
+            isExpanded: true,
+            decoration: InputDecoration(
+              labelText: 'Select Doctor',
+              prefixIcon: Icon(Icons.medical_services_outlined, color: _roleColor),
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+            ),
+            items: _doctors
+                .map(
+                  (doctor) => DropdownMenuItem<String>(
+                    value: doctor['id'] as String,
+                    child: Text(doctor['full_name'] as String? ?? 'Doctor'),
+                  ),
+                )
+                .toList(),
+            onChanged: (value) => setState(() => _selectedDoctorId = value),
+          ),
+        ],
         const SizedBox(height: 24),
         // Animated fingerprint icon
         Center(
@@ -712,13 +835,14 @@ class _LoginScreenState extends State<LoginScreen> {
                 ),
               ),
         const SizedBox(height: 16),
-        TextButton.icon(
-          onPressed: () {
-            setState(() => _isUsingFallback = true);
-          },
-          icon: Icon(Icons.email_outlined, size: 16, color: Colors.grey[600]),
-          label: Text('Use Email & Password System', style: TextStyle(color: Colors.grey[600], fontSize: 12)),
-        ),
+        if (_role != UserRole.admin)
+          TextButton.icon(
+            onPressed: () {
+              setState(() => _isUsingFallback = true);
+            },
+            icon: Icon(Icons.email_outlined, size: 16, color: Colors.grey[600]),
+            label: Text('Use Email & Password System', style: TextStyle(color: Colors.grey[600], fontSize: 12)),
+          ),
       ],
     );
   }
@@ -796,6 +920,14 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   Widget build(BuildContext context) {
+    void goBackToRoleSelection() {
+      if (Navigator.of(context).canPop()) {
+        Navigator.of(context).pop();
+      } else {
+        context.go('/auth/role');
+      }
+    }
+
     return Scaffold(
       body: Stack(
         children: [
@@ -904,7 +1036,7 @@ class _LoginScreenState extends State<LoginScreen> {
                             const SizedBox(height: 16),
                           ],
                           // Render correct state fields dynamically
-                          if (_isUsingFallback)
+                          if (_role == UserRole.admin || _isUsingFallback)
                             _buildFallbackLoginFields()
                           else if (_isRegisteringBiometric)
                             _buildBiometricRegistrationFields()
@@ -915,6 +1047,24 @@ class _LoginScreenState extends State<LoginScreen> {
                     ),
                   ),
                 ],
+              ),
+            ),
+          ),
+          Positioned(
+            top: 8,
+            left: 8,
+            child: SafeArea(
+              child: Material(
+                color: Colors.white.withValues(alpha: 0.18),
+                borderRadius: BorderRadius.circular(14),
+                child: InkWell(
+                  onTap: goBackToRoleSelection,
+                  borderRadius: BorderRadius.circular(14),
+                  child: const Padding(
+                    padding: EdgeInsets.all(10),
+                    child: Icon(Icons.arrow_back_rounded, color: Colors.white),
+                  ),
+                ),
               ),
             ),
           ),

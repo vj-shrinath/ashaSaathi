@@ -53,6 +53,8 @@ class BackendApiService {
     required String password,
     required String fullName,
     required String role,
+    required String phcId,
+    String? doctorId,
   }) async {
     final response = await http.post(
       Uri.parse('$_baseUrl/api/v1/auth/register-worker'),
@@ -62,6 +64,8 @@ class BackendApiService {
         'password': password,
         'fullName': fullName,
         'role': role,
+        'phc_id': phcId,
+        'doctor_id': doctorId,
       }),
     );
 
@@ -98,6 +102,91 @@ class BackendApiService {
     }
 
     throw Exception(data['message'] ?? 'Failed to resolve worker profile');
+  }
+
+  static Future<List<Map<String, dynamic>>> listPhcs() async {
+    final response = await http.get(Uri.parse('$_baseUrl/api/v1/auth/phcs'));
+    final data = jsonDecode(response.body);
+    if (response.statusCode == 200 && data['status'] == 'success') {
+      final items = (data['data'] as List<dynamic>? ?? const []);
+      return items.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+    }
+    throw Exception(data['message'] ?? 'Failed to load PHCs');
+  }
+
+  static Future<List<Map<String, dynamic>>> listDoctorsByPhc({
+    required String phcId,
+  }) async {
+    final response = await http.get(Uri.parse('$_baseUrl/api/v1/auth/phcs/$phcId/doctors'));
+    final data = jsonDecode(response.body);
+    if (response.statusCode == 200 && data['status'] == 'success') {
+      final items = (data['data'] as List<dynamic>? ?? const []);
+      return items.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+    }
+    throw Exception(data['message'] ?? 'Failed to load doctors');
+  }
+
+  static Future<Map<String, dynamic>> createPhc({
+    required String name,
+    required String district,
+    required String taluka,
+    required String village,
+    required String address,
+    required String adminToken,
+  }) async {
+    final response = await http.post(
+      Uri.parse('$_baseUrl/api/v1/auth/admin/phc'),
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer $adminToken',
+      },
+      body: jsonEncode({
+        'name': name,
+        'district': district,
+        'taluka': taluka,
+        'village': village,
+        'address': address,
+      }),
+    );
+
+    final data = jsonDecode(response.body);
+    if (response.statusCode == 200 && data['status'] == 'success') {
+      return Map<String, dynamic>.from(data['data']);
+    }
+    throw Exception(data['message'] ?? 'Failed to create PHC');
+  }
+
+  static Future<Map<String, dynamic>> updatePhc({
+    required String phcId,
+    required String name,
+    required String district,
+    required String taluka,
+    required String village,
+    required String address,
+    required String adminToken,
+    bool isActive = true,
+  }) async {
+    final response = await http.patch(
+      Uri.parse('$_baseUrl/api/v1/auth/admin/phc/$phcId'),
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer $adminToken',
+      },
+      body: jsonEncode({
+        'name': name,
+        'district': district,
+        'taluka': taluka,
+        'village': village,
+        'address': address,
+        'is_active': isActive,
+      }),
+    );
+
+    final data = jsonDecode(response.body);
+    if (response.statusCode == 200 && data['status'] == 'success') {
+      return Map<String, dynamic>.from(data['data']);
+    }
+    throw Exception(data['message'] ?? 'Failed to update PHC');
   }
 
   /// Generates a temporary Sync PIN on the backend for device transfer (Admin auth required)

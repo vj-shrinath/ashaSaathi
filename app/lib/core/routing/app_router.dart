@@ -30,7 +30,7 @@ final appRouter = GoRouter(
 
     if (user == null) {
       if (loggingIn || selectingRole) return null;
-      return '/auth/login';
+      return '/auth/role';
     }
 
     final roleStr = user.userMetadata?['role'] as String?;
@@ -84,7 +84,7 @@ final appRouter = GoRouter(
     // Generic login (shows role switcher)
     GoRoute(
       path: '/auth/login',
-      builder: (context, state) => const LoginScreen(),
+      builder: (context, state) => const RoleSelectionScreen(),
     ),
     // Role-specific logins
     GoRoute(

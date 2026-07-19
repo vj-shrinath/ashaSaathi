@@ -19,7 +19,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 5, vsync: this);
+    _tabController = TabController(length: 6, vsync: this);
   }
 
   @override
@@ -52,6 +52,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
           isScrollable: true,
           tabs: const [
             Tab(text: 'OVERVIEW'),
+            Tab(text: 'PHC SETUP'),
             Tab(text: 'ASHA ACTIVITY'),
             Tab(text: 'DOCTOR ACTIVITY'),
             Tab(text: 'ALL LOGS'),
@@ -78,6 +79,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
         controller: _tabController,
         children: [
           _OverviewTab(),
+          const _PhcSetupTab(),
           _ActivityTab(userRole: 'asha', title: 'ASHA Worker Activity'),
           _ActivityTab(userRole: 'doctor', title: 'Doctor Activity'),
           _AllActivityLogsTab(),
@@ -298,6 +300,312 @@ class _AllActivityLogsTab extends StatelessWidget {
                 _ActivityTab(userRole: 'asha', title: 'ASHA Activity'),
                 _ActivityTab(userRole: 'doctor', title: 'Doctor Activity'),
               ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _PhcSetupTab extends StatefulWidget {
+  const _PhcSetupTab();
+
+  @override
+  State<_PhcSetupTab> createState() => _PhcSetupTabState();
+}
+
+class _PhcSetupTabState extends State<_PhcSetupTab> {
+  final _nameController = TextEditingController();
+  final _districtController = TextEditingController();
+  final _talukaController = TextEditingController();
+  final _villageController = TextEditingController();
+  final _addressController = TextEditingController();
+  bool _isSaving = false;
+  bool _isLoading = false;
+  String? _error;
+  Map<String, dynamic>? _createdPhc;
+  List<Map<String, dynamic>> _phcs = [];
+  Map<String, dynamic>? _editingPhc;
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _districtController.dispose();
+    _talukaController.dispose();
+    _villageController.dispose();
+    _addressController.dispose();
+    super.dispose();
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _loadPhcs();
+  }
+
+  Future<void> _loadPhcs() async {
+    setState(() => _isLoading = true);
+    try {
+      final items = await BackendApiService.listPhcs();
+      if (!mounted) return;
+      setState(() {
+        _phcs = items;
+        _isLoading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = e.toString().replaceAll('Exception: ', '');
+        _isLoading = false;
+      });
+    }
+  }
+
+  void _fillForm(Map<String, dynamic> phc) {
+    setState(() {
+      _editingPhc = phc;
+      _nameController.text = phc['name'] as String? ?? '';
+      _districtController.text = phc['district'] as String? ?? '';
+      _talukaController.text = phc['taluka'] as String? ?? '';
+      _villageController.text = phc['village'] as String? ?? '';
+      _addressController.text = phc['address'] as String? ?? '';
+      _error = null;
+      _createdPhc = null;
+    });
+  }
+
+  void _clearForm() {
+    setState(() {
+      _editingPhc = null;
+      _nameController.clear();
+      _districtController.clear();
+      _talukaController.clear();
+      _villageController.clear();
+      _addressController.clear();
+      _error = null;
+      _createdPhc = null;
+    });
+  }
+
+  Future<void> _createPhc() async {
+    final name = _nameController.text.trim();
+    final district = _districtController.text.trim();
+    final taluka = _talukaController.text.trim();
+    final village = _villageController.text.trim();
+    final address = _addressController.text.trim();
+
+    if (name.isEmpty || district.isEmpty || taluka.isEmpty || village.isEmpty || address.isEmpty) {
+      setState(() => _error = 'All PHC details are required');
+      return;
+    }
+
+    setState(() {
+      _isSaving = true;
+      _error = null;
+      _createdPhc = null;
+    });
+
+    try {
+      final session = Supabase.instance.client.auth.currentSession;
+      if (session == null) {
+        setState(() {
+          _error = 'Admin session expired. Please re-login.';
+          _isSaving = false;
+        });
+        return;
+      }
+
+      final phc = _editingPhc == null
+          ? await BackendApiService.createPhc(
+              name: name,
+              district: district,
+              taluka: taluka,
+              village: village,
+              address: address,
+              adminToken: session.accessToken,
+            )
+          : await BackendApiService.updatePhc(
+              phcId: _editingPhc!['id'] as String,
+              name: name,
+              district: district,
+              taluka: taluka,
+              village: village,
+              address: address,
+              adminToken: session.accessToken,
+            );
+
+      if (!mounted) return;
+      setState(() {
+        _createdPhc = phc;
+        _isSaving = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = e.toString().replaceAll('Exception: ', '');
+        _isSaving = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Card(
+            elevation: 4,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            child: Padding(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    children: [
+                      const Icon(Icons.local_hospital_outlined, color: Color(0xFF6A1B9A)),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          _editingPhc == null ? 'Create PHC' : 'Edit PHC',
+                          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                        ),
+                      ),
+                      if (_editingPhc != null)
+                        TextButton(
+                          onPressed: _clearForm,
+                          child: const Text('Cancel Edit'),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Create the primary health center first. Doctors and ASHAs will be attached to this PHC.',
+                    style: TextStyle(color: Colors.grey[600], fontSize: 12),
+                  ),
+                  const SizedBox(height: 20),
+                  TextField(controller: _nameController, decoration: const InputDecoration(labelText: 'PHC Name', prefixIcon: Icon(Icons.local_hospital_outlined))),
+                  const SizedBox(height: 16),
+                  TextField(controller: _districtController, decoration: const InputDecoration(labelText: 'District', prefixIcon: Icon(Icons.map_outlined))),
+                  const SizedBox(height: 16),
+                  TextField(controller: _talukaController, decoration: const InputDecoration(labelText: 'Taluka', prefixIcon: Icon(Icons.account_tree_outlined))),
+                  const SizedBox(height: 16),
+                  TextField(controller: _villageController, decoration: const InputDecoration(labelText: 'Village', prefixIcon: Icon(Icons.location_on_outlined))),
+                  const SizedBox(height: 16),
+                  TextField(
+                    controller: _addressController,
+                    maxLines: 3,
+                    decoration: const InputDecoration(
+                      labelText: 'PHC Address',
+                      alignLabelWithHint: true,
+                      prefixIcon: Icon(Icons.home_work_outlined),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  if (_error != null) ...[
+                    Text(_error!, style: const TextStyle(color: Colors.red)),
+                    const SizedBox(height: 12),
+                  ],
+                  _isSaving
+                      ? const Center(child: CircularProgressIndicator())
+                      : FilledButton.icon(
+                          onPressed: _createPhc,
+                          icon: Icon(_editingPhc == null ? Icons.add_business_outlined : Icons.save_outlined),
+                          label: Text(_editingPhc == null ? 'Create PHC' : 'Update PHC'),
+                        ),
+                  if (_createdPhc != null) ...[
+                    const SizedBox(height: 16),
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.green.withValues(alpha: 0.08),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Text(
+                        'Saved: ${_createdPhc!['name']} | Code: ${_createdPhc!['code']}',
+                        style: const TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+          Card(
+            elevation: 4,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            child: Padding(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text('Existing PHCs', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                      TextButton.icon(
+                        onPressed: _loadPhcs,
+                        icon: const Icon(Icons.refresh_rounded),
+                        label: const Text('Refresh'),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  if (_isLoading)
+                    const Center(child: Padding(padding: EdgeInsets.all(20), child: CircularProgressIndicator()))
+                  else if (_phcs.isEmpty)
+                    Text('No PHCs found yet.', style: TextStyle(color: Colors.grey[600]))
+                  else
+                    ..._phcs.map((phc) {
+                      return Container(
+                        margin: const EdgeInsets.only(bottom: 12),
+                        padding: const EdgeInsets.all(14),
+                        decoration: BoxDecoration(
+                          color: Colors.grey.shade50,
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(color: Colors.grey.shade200),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    phc['name'] as String? ?? 'PHC',
+                                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                                  ),
+                                ),
+                                Text(
+                                  phc['code'] as String? ?? '',
+                                  style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 6),
+                            Text('${phc['district'] ?? ''} > ${phc['taluka'] ?? ''} > ${phc['village'] ?? ''}',
+                                style: TextStyle(color: Colors.grey[700], fontSize: 12)),
+                            const SizedBox(height: 4),
+                            Text(phc['address'] as String? ?? '', style: TextStyle(color: Colors.grey[600], fontSize: 12)),
+                            const SizedBox(height: 10),
+                            Align(
+                              alignment: Alignment.centerRight,
+                              child: TextButton.icon(
+                                onPressed: () => _fillForm(phc),
+                                icon: const Icon(Icons.edit_outlined),
+                                label: const Text('Edit'),
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    }),
+                ],
+              ),
             ),
           ),
         ],
@@ -836,4 +1144,4 @@ class _DeviceSyncTabState extends State<_DeviceSyncTab> {
       ),
     );
   }
-}
+}

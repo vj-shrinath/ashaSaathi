@@ -6,6 +6,17 @@ const router = Router();
 
 const normalizePhone = (phone: string) => phone.replace(/\D/g, '');
 const buildEmail = (phone: string) => `${normalizePhone(phone)}@gmail.com`;
+const slugify = (value: string) =>
+  value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+
+const buildPhcCode = (district: string, taluka: string, village: string, name: string) => {
+  const parts = [district, taluka, village, name].map(slugify).filter(Boolean);
+  return parts.join('-').toUpperCase();
+};
 
 const findUserByEmail = async (email: string) => {
   const { data: usersData, error } = await supabase.auth.admin.listUsers();
@@ -13,6 +24,17 @@ const findUserByEmail = async (email: string) => {
 
   const user = usersData.users.find(u => u.email === email);
   return { user };
+};
+
+const getAdminProfile = async (adminId: string) => {
+  const { data: profile, error } = await supabase
+    .from('user_profiles')
+    .select('id, role, phc_id, full_name, is_active')
+    .eq('id', adminId)
+    .maybeSingle();
+
+  if (error) return { error };
+  return { profile };
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -36,11 +58,7 @@ const requireAdmin = async (req: Request, res: Response, next: NextFunction): Pr
     }
 
     // 2. Fetch User Profile to guarantee they are an Admin
-    const { data: profile, error: dbError } = await supabase
-      .from('user_profiles')
-      .select('role')
-      .eq('id', user.id)
-      .single();
+    const { profile, error: dbError } = await getAdminProfile(user.id);
 
     if (dbError || !profile || profile.role !== 'admin') {
       res.status(403).json({ status: 'error', message: 'Forbidden: Admin access required' });
@@ -134,6 +152,118 @@ router.post('/admin/generate-sync-token', requireAdmin, async (req: Request, res
   }
 });
 
+router.get('/phcs', async (_req: Request, res: Response): Promise<void> => {
+  try {
+    const { data, error } = await supabase
+      .from('phcs')
+      .select('id, name, code, district, taluka, village, address, is_active, created_at')
+      .eq('is_active', true)
+      .order('name', { ascending: true });
+
+    if (error) {
+      res.status(500).json({ status: 'error', message: error.message });
+      return;
+    }
+
+    res.status(200).json({ status: 'success', data: data ?? [] });
+  } catch (err: any) {
+    res.status(500).json({ status: 'error', message: err.message || 'Internal server error' });
+  }
+});
+
+router.get('/phcs/:phcId/doctors', async (req: Request, res: Response): Promise<void> => {
+  const { phcId } = req.params;
+  try {
+    const { data, error } = await supabase
+      .from('user_profiles')
+      .select('id, full_name, role, phc_id, is_active')
+      .eq('role', 'doctor')
+      .eq('phc_id', phcId)
+      .eq('is_active', true)
+      .order('full_name', { ascending: true });
+
+    if (error) {
+      res.status(500).json({ status: 'error', message: error.message });
+      return;
+    }
+
+    res.status(200).json({ status: 'success', data: data ?? [] });
+  } catch (err: any) {
+    res.status(500).json({ status: 'error', message: err.message || 'Internal server error' });
+  }
+});
+
+router.post('/admin/phc', requireAdmin, async (req: Request, res: Response): Promise<void> => {
+  const { name, district, taluka, village, address } = req.body;
+  if (!name || !district || !taluka || !village || !address) {
+    res.status(400).json({ status: 'error', message: 'PHC name, district, taluka, village, and address are required' });
+    return;
+  }
+
+  try {
+    const code = buildPhcCode(String(district), String(taluka), String(village), String(name));
+    const { data, error } = await supabase
+      .from('phcs')
+      .upsert({
+        name: String(name).trim(),
+        code,
+        district: String(district).trim(),
+        taluka: String(taluka).trim(),
+        village: String(village).trim(),
+        address: String(address).trim(),
+        is_active: true,
+      }, { onConflict: 'code' })
+      .select('id, name, code, district, taluka, village, address, is_active, created_at')
+      .single();
+
+    if (error) {
+      res.status(500).json({ status: 'error', message: error.message });
+      return;
+    }
+
+    res.status(200).json({ status: 'success', data });
+  } catch (err: any) {
+    res.status(500).json({ status: 'error', message: err.message || 'Internal server error' });
+  }
+});
+
+router.patch('/admin/phc/:phcId', requireAdmin, async (req: Request, res: Response): Promise<void> => {
+  const { phcId } = req.params;
+  const { name, district, taluka, village, address, is_active } = req.body;
+
+  if (!name || !district || !taluka || !village || !address) {
+    res.status(400).json({ status: 'error', message: 'PHC name, district, taluka, village, and address are required' });
+    return;
+  }
+
+  try {
+    const code = buildPhcCode(String(district), String(taluka), String(village), String(name));
+    const { data, error } = await supabase
+      .from('phcs')
+      .update({
+        name: String(name).trim(),
+        code,
+        district: String(district).trim(),
+        taluka: String(taluka).trim(),
+        village: String(village).trim(),
+        address: String(address).trim(),
+        is_active: typeof is_active === 'boolean' ? is_active : true,
+      })
+      .eq('id', phcId)
+      .select('id, name, code, district, taluka, village, address, is_active, created_at')
+      .single();
+
+    if (error) {
+      res.status(500).json({ status: 'error', message: error.message });
+      return;
+    }
+
+    res.status(200).json({ status: 'success', data });
+  } catch (err: any) {
+    res.status(500).json({ status: 'error', message: err.message || 'Internal server error' });
+  }
+});
+
 // ─────────────────────────────────────────────────────────────
 // 2. Public Endpoint: Verify Sync Token (No Auth Needed)
 // ─────────────────────────────────────────────────────────────
@@ -206,9 +336,9 @@ router.post('/verify-sync-token', async (req: Request, res: Response): Promise<v
 // 3. Public Endpoint: Register Worker (Bypasses email SMTP/rate limits)
 // ─────────────────────────────────────────────────────────────
 router.post('/register-worker', async (req: Request, res: Response): Promise<void> => {
-  const { phone, password, fullName, role } = req.body;
+  const { phone, password, fullName, role, phc_id, doctor_id } = req.body;
 
-  if (!phone || !password || !fullName || !role) {
+  if (!phone || !password || !fullName || !role || !phc_id) {
     res.status(400).json({ status: 'error', message: 'All registration parameters are required' });
     return;
   }
@@ -216,6 +346,48 @@ router.post('/register-worker', async (req: Request, res: Response): Promise<voi
   const email = buildEmail(phone);
 
   try {
+    const { data: phc, error: phcError } = await supabase
+      .from('phcs')
+      .select('id, name, is_active')
+      .eq('id', phc_id)
+      .maybeSingle();
+
+    if (phcError) {
+      res.status(500).json({ status: 'error', message: phcError.message });
+      return;
+    }
+
+    if (!phc || !phc.is_active) {
+      res.status(400).json({ status: 'error', message: 'Selected PHC is not available' });
+      return;
+    }
+
+    if (role === 'asha' && !doctor_id) {
+      res.status(400).json({ status: 'error', message: 'Doctor selection is required for ASHA workers' });
+      return;
+    }
+
+    if (role === 'asha') {
+      const { data: doctorProfile, error: doctorError } = await supabase
+        .from('user_profiles')
+        .select('id, role, phc_id, is_active')
+        .eq('id', doctor_id)
+        .eq('role', 'doctor')
+        .eq('phc_id', phc_id)
+        .eq('is_active', true)
+        .maybeSingle();
+
+      if (doctorError) {
+        res.status(500).json({ status: 'error', message: doctorError.message });
+        return;
+      }
+
+      if (!doctorProfile) {
+        res.status(400).json({ status: 'error', message: 'Selected doctor does not belong to this PHC' });
+        return;
+      }
+    }
+
     const { user: existingUser, error: findError } = await findUserByEmail(email);
     if (findError) {
       res.status(500).json({ status: 'error', message: findError.message });
@@ -229,6 +401,8 @@ router.post('/register-worker', async (req: Request, res: Response): Promise<voi
           role,
           full_name: fullName,
           phone: normalizePhone(phone),
+          phc_id,
+          doctor_id: doctor_id ?? null,
         },
       });
 
@@ -241,6 +415,8 @@ router.post('/register-worker', async (req: Request, res: Response): Promise<voi
         id: existingUser.id,
         role,
         full_name: fullName,
+        phc_id,
+        doctor_id: doctor_id ?? null,
         is_active: true,
         created_at: new Date().toISOString(),
       }, { onConflict: 'id' });
@@ -270,6 +446,8 @@ router.post('/register-worker', async (req: Request, res: Response): Promise<voi
         role,
         full_name: fullName,
         phone: normalizePhone(phone),
+        phc_id,
+        doctor_id: doctor_id ?? null,
       }
     });
 
@@ -290,6 +468,8 @@ router.post('/register-worker', async (req: Request, res: Response): Promise<voi
       id: createData.user.id,
       role,
       full_name: fullName,
+      phc_id,
+      doctor_id: doctor_id ?? null,
       is_active: true,
       created_at: new Date().toISOString(),
     }, { onConflict: 'id' });
@@ -336,7 +516,7 @@ router.post('/resolve-worker', async (req: Request, res: Response): Promise<void
 
     const { data: profile, error: profileError } = await supabase
       .from('user_profiles')
-      .select('role, full_name, is_active')
+      .select('role, full_name, phc_id, doctor_id, is_active')
       .eq('id', user.id)
       .maybeSingle();
 
@@ -352,6 +532,8 @@ router.post('/resolve-worker', async (req: Request, res: Response): Promise<void
         email: user.email,
         role: profile?.role ?? user.user_metadata?.role ?? 'asha',
         full_name: profile?.full_name ?? user.user_metadata?.full_name ?? 'ASHA Worker',
+        phc_id: profile?.phc_id ?? user.user_metadata?.phc_id ?? null,
+        doctor_id: profile?.doctor_id ?? user.user_metadata?.doctor_id ?? null,
         is_active: profile?.is_active ?? true,
       },
     });

@@ -16,9 +16,32 @@ CREATE TABLE IF NOT EXISTS public.user_profiles (
   id          UUID        PRIMARY KEY,          -- matches auth.users.id
   role        TEXT        NOT NULL,             -- 'asha' | 'doctor' | 'admin'
   full_name   TEXT,                             -- display name (optional cache)
+  phc_id      UUID,                             -- parent PHC/facility
+  doctor_id   UUID,                             -- ASHA's supervising doctor
   is_active   BOOLEAN     NOT NULL DEFAULT TRUE,
   created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+CREATE TABLE IF NOT EXISTS public.phcs (
+  id          UUID        PRIMARY KEY,
+  name        TEXT        NOT NULL,
+  code        TEXT        NOT NULL UNIQUE,
+  district    TEXT,
+  taluka      TEXT,
+  village     TEXT,
+  address     TEXT,
+  is_active   BOOLEAN     NOT NULL DEFAULT TRUE,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_phcs_code
+  ON public.phcs (code);
+
+CREATE INDEX IF NOT EXISTS idx_user_profiles_phc_id
+  ON public.user_profiles (phc_id);
+
+CREATE INDEX IF NOT EXISTS idx_user_profiles_doctor_id
+  ON public.user_profiles (doctor_id);
 
 -- Fast lookup by role (e.g. list all ASHAs)
 CREATE INDEX IF NOT EXISTS idx_user_profiles_role
@@ -49,6 +72,23 @@ CREATE POLICY "Deny anon read on user_profiles"
   FOR SELECT
   TO anon
   USING (FALSE);
+
+ALTER TABLE public.phcs ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Authenticated can read active phcs" ON public.phcs;
+DROP POLICY IF EXISTS "Admin can manage phcs" ON public.phcs;
+
+CREATE POLICY "Authenticated can read active phcs"
+  ON public.phcs
+  FOR SELECT
+  TO authenticated
+  USING (is_active = TRUE);
+
+CREATE POLICY "Admin can manage phcs"
+  ON public.phcs
+  FOR ALL
+  TO authenticated
+  USING (auth.jwt() ->> 'role' = 'admin');
 
 -- ─────────────────────────────────────────────────────────────
 -- 3. Verify
