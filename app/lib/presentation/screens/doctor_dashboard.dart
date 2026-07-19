@@ -16,9 +16,73 @@ class DoctorDashboardScreen extends StatefulWidget {
 class _DoctorDashboardScreenState extends State<DoctorDashboardScreen>
     with SingleTickerProviderStateMixin {
   _DashboardFilter _selectedFilter = _DashboardFilter.urgent;
+  bool _loadingScope = true;
+  Set<String> _scopedAshaIds = {};
+  String? _doctorId;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadDoctorScope();
+  }
+
+  Future<void> _loadDoctorScope() async {
+    try {
+      final user = Supabase.instance.client.auth.currentUser;
+      if (user == null) {
+        setState(() => _loadingScope = false);
+        return;
+      }
+      _doctorId = user.id;
+
+      // 1. Fetch current doctor profile to find phc_id
+      final docProfile = await Supabase.instance.client
+          .from('user_profiles')
+          .select('phc_id')
+          .eq('id', user.id)
+          .maybeSingle();
+
+      if (docProfile != null && docProfile['phc_id'] != null) {
+        final phcId = docProfile['phc_id'] as String;
+
+        // 2. Fetch ASHA IDs in the doctor's PHC who are assigned to this doctor
+        final ashaRows = await Supabase.instance.client
+            .from('user_profiles')
+            .select('id')
+            .eq('role', 'asha')
+            .eq('phc_id', phcId)
+            .eq('doctor_id', user.id);
+
+        if (mounted) {
+          setState(() {
+            _scopedAshaIds = (ashaRows as List).map((r) => r['id'] as String).toSet();
+            _loadingScope = false;
+          });
+        }
+      } else {
+        if (mounted) {
+          setState(() => _loadingScope = false);
+        }
+      }
+    } catch (e) {
+      debugPrint("Error loading doctor scope: $e");
+      if (mounted) {
+        setState(() => _loadingScope = false);
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
+    if (_loadingScope) {
+      return const Scaffold(
+        backgroundColor: Color(0xFFE8F4FD),
+        body: Center(
+          child: CircularProgressIndicator(color: Color(0xFF0277BD)),
+        ),
+      );
+    }
+
     final theme = Theme.of(context);
 
     return Scaffold(
@@ -38,7 +102,10 @@ class _DoctorDashboardScreenState extends State<DoctorDashboardScreen>
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh_rounded, color: Colors.white),
-            onPressed: () => setState(() {}),
+            onPressed: () {
+              _loadDoctorScope();
+              setState(() {});
+            },
             tooltip: 'Refresh',
           ),
           IconButton(
@@ -52,7 +119,10 @@ class _DoctorDashboardScreenState extends State<DoctorDashboardScreen>
         ],
       ),
       body: RefreshIndicator(
-        onRefresh: () async => setState(() {}),
+        onRefresh: () async {
+          await _loadDoctorScope();
+          setState(() {});
+        },
         child: ListView(
           padding: const EdgeInsets.all(16),
           children: [
@@ -61,6 +131,7 @@ class _DoctorDashboardScreenState extends State<DoctorDashboardScreen>
             _SummaryGrid(
               selectedFilter: _selectedFilter,
               onSelected: (filter) => setState(() => _selectedFilter = filter),
+              myAshaIds: _scopedAshaIds,
             ),
             const SizedBox(height: 16),
             _SectionPills(
@@ -73,7 +144,11 @@ class _DoctorDashboardScreenState extends State<DoctorDashboardScreen>
             const SizedBox(height: 10),
             SizedBox(
               height: 420,
-              child: _PatientFeedPanel(filter: _selectedFilter),
+              child: _PatientFeedPanel(
+                filter: _selectedFilter,
+                myAshaIds: _scopedAshaIds,
+                doctorId: _doctorId,
+              ),
             ),
           ],
         ),
@@ -124,10 +199,12 @@ class _OverviewHeader extends StatelessWidget {
 class _SummaryGrid extends StatelessWidget {
   final _DashboardFilter selectedFilter;
   final ValueChanged<_DashboardFilter> onSelected;
+  final Set<String> myAshaIds;
 
   const _SummaryGrid({
     required this.selectedFilter,
     required this.onSelected,
+    required this.myAshaIds,
   });
 
   @override
@@ -135,7 +212,8 @@ class _SummaryGrid extends StatelessWidget {
     return StreamBuilder<List<TriageReport>>(
       stream: FirebaseService.watchTriageReports(),
       builder: (context, snapshot) {
-        final reports = snapshot.data ?? [];
+        final rawReports = snapshot.data ?? [];
+        final reports = rawReports.where((r) => myAshaIds.contains(r.ashaId)).toList();
         final latestByPatient = <String, TriageReport>{};
         for (final r in reports) {
           latestByPatient.putIfAbsent(r.patientId, () => r);
@@ -305,6 +383,10 @@ class _SectionPills extends StatelessWidget {
 }
 
 class _ActivityFeedTab extends StatelessWidget {
+  final Set<String> myAshaIds;
+
+  const _ActivityFeedTab({required this.myAshaIds});
+
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<List<ActivityLog>>(
@@ -314,7 +396,8 @@ class _ActivityFeedTab extends StatelessWidget {
           return const Center(child: CircularProgressIndicator());
         }
 
-        final logs = snapshot.data ?? [];
+        final rawLogs = snapshot.data ?? [];
+        final logs = rawLogs.where((l) => myAshaIds.contains(l.userId)).toList();
 
         if (logs.isEmpty) {
           return const _EmptyState(
@@ -359,19 +442,25 @@ class _ActivityFeedTab extends StatelessWidget {
 
 class _PatientFeedPanel extends StatelessWidget {
   final _DashboardFilter filter;
+  final Set<String> myAshaIds;
+  final String? doctorId;
 
-  const _PatientFeedPanel({required this.filter});
+  const _PatientFeedPanel({
+    required this.filter,
+    required this.myAshaIds,
+    required this.doctorId,
+  });
 
   @override
   Widget build(BuildContext context) {
     if (filter == _DashboardFilter.pending) {
-      return _PendingReviewTab();
+      return _PendingReviewTab(myAshaIds: myAshaIds);
     }
     if (filter == _DashboardFilter.prescriptions) {
-      return _PrescriptionsTab();
+      return _PrescriptionsTab(doctorId: doctorId);
     }
     if (filter == _DashboardFilter.activity) {
-      return _ActivityFeedTab();
+      return _ActivityFeedTab(myAshaIds: myAshaIds);
     }
 
     return StreamBuilder<List<TriageReport>>(
@@ -381,7 +470,8 @@ class _PatientFeedPanel extends StatelessWidget {
           return const Center(child: CircularProgressIndicator());
         }
 
-        final reports = snapshot.data ?? [];
+        final rawReports = snapshot.data ?? [];
+        final reports = rawReports.where((r) => myAshaIds.contains(r.ashaId)).toList();
         final latestByPatient = <String, TriageReport>{};
         for (final report in reports) {
           latestByPatient.putIfAbsent(report.patientId, () => report);
@@ -495,6 +585,10 @@ class _PatientTriageTile extends StatelessWidget {
 // PENDING REVIEW TAB
 // ─────────────────────────────────────────────────────────────────────────────
 class _PendingReviewTab extends StatelessWidget {
+  final Set<String> myAshaIds;
+
+  const _PendingReviewTab({required this.myAshaIds});
+
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<List<TriageReport>>(
@@ -504,7 +598,8 @@ class _PendingReviewTab extends StatelessWidget {
           return const Center(child: CircularProgressIndicator());
         }
 
-        final reports = snapshot.data ?? [];
+        final rawReports = snapshot.data ?? [];
+        final reports = rawReports.where((r) => myAshaIds.contains(r.ashaId)).toList();
         final pending = reports.where((r) => !r.reviewedByDoctor).toList();
 
         if (pending.isEmpty) {
@@ -532,10 +627,14 @@ class _PendingReviewTab extends StatelessWidget {
 // PRESCRIPTIONS TAB
 // ─────────────────────────────────────────────────────────────────────────────
 class _PrescriptionsTab extends StatelessWidget {
+  final String? doctorId;
+
+  const _PrescriptionsTab({required this.doctorId});
+
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<List<Prescription>>(
-      stream: FirebaseService.watchPrescriptions(),
+      stream: FirebaseService.watchPrescriptions(doctorId: doctorId),
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const Center(child: CircularProgressIndicator());
