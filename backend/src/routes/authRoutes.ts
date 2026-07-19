@@ -4,6 +4,17 @@ import crypto from 'crypto';
 
 const router = Router();
 
+const normalizePhone = (phone: string) => phone.replace(/\D/g, '');
+const buildEmail = (phone: string) => `${normalizePhone(phone)}@gmail.com`;
+
+const findUserByEmail = async (email: string) => {
+  const { data: usersData, error } = await supabase.auth.admin.listUsers();
+  if (error) return { error };
+
+  const user = usersData.users.find(u => u.email === email);
+  return { user };
+};
+
 // ─────────────────────────────────────────────────────────────
 // Middleware: Verify Admin Authorization
 // ─────────────────────────────────────────────────────────────
@@ -55,17 +66,15 @@ router.post('/admin/generate-sync-token', requireAdmin, async (req: Request, res
     return;
   }
 
-  const email = `${phone}@gmail.com`;
+  const email = buildEmail(phone);
 
   try {
     // A. Check if the user exists in Supabase Auth using admin client
-    const { data: usersData, error: findError } = await supabase.auth.admin.listUsers();
+    const { user: matchedUser, error: findError } = await findUserByEmail(email);
     if (findError) {
        res.status(500).json({ status: 'error', message: findError.message });
        return;
     }
-
-    const matchedUser = usersData.users.find(u => u.email === email);
     if (!matchedUser) {
       res.status(404).json({ status: 'error', message: 'Employee user account not found for this phone number' });
       return;
@@ -164,14 +173,17 @@ router.post('/verify-sync-token', async (req: Request, res: Response): Promise<v
     }
 
     // C. Get user metadata (e.g. name) to pass back to the client
-    const email = `${phone}@gmail.com`;
-    const { data: usersData, error: listError } = await supabase.auth.admin.listUsers();
+    const email = buildEmail(phone);
+    const { user, error: listError } = await findUserByEmail(email);
     
     let fullName = 'ASHA Worker';
-    if (!listError && usersData) {
-      const user = usersData.users.find(u => u.email === email);
-      if (user && user.user_metadata && user.user_metadata.full_name) {
+    let role = 'asha';
+    if (!listError && user) {
+      if (user.user_metadata && user.user_metadata.full_name) {
         fullName = user.user_metadata.full_name;
+      }
+      if (user.user_metadata && user.user_metadata.role) {
+        role = user.user_metadata.role;
       }
     }
 
@@ -181,6 +193,7 @@ router.post('/verify-sync-token', async (req: Request, res: Response): Promise<v
       data: {
         temp_password: tokenRecord.temp_password,
         full_name: fullName,
+        role,
       },
     });
 
@@ -200,24 +213,68 @@ router.post('/register-worker', async (req: Request, res: Response): Promise<voi
     return;
   }
 
-  const email = `${phone}@gmail.com`;
+  const email = buildEmail(phone);
 
   try {
+    const { user: existingUser, error: findError } = await findUserByEmail(email);
+    if (findError) {
+      res.status(500).json({ status: 'error', message: findError.message });
+      return;
+    }
+
+    if (existingUser) {
+      const { error: updateUserError } = await supabase.auth.admin.updateUserById(existingUser.id, {
+        password,
+        user_metadata: {
+          role,
+          full_name: fullName,
+          phone: normalizePhone(phone),
+        },
+      });
+
+      if (updateUserError) {
+        res.status(500).json({ status: 'error', message: `Profile update failed: ${updateUserError.message}` });
+        return;
+      }
+
+      const { error: profileError } = await supabase.from('user_profiles').upsert({
+        id: existingUser.id,
+        role,
+        full_name: fullName,
+        is_active: true,
+        created_at: new Date().toISOString(),
+      }, { onConflict: 'id' });
+
+      if (profileError) {
+        res.status(500).json({ status: 'error', message: `Profile sync failed: ${profileError.message}` });
+        return;
+      }
+
+      res.status(200).json({
+        status: 'success',
+        message: 'Worker profile restored successfully',
+        data: {
+          user_id: existingUser.id,
+          existed: true,
+        },
+      });
+      return;
+    }
+
     // A. Use admin API to create the user directly (bypassing confirmation emails)
     const { data: createData, error: createError } = await supabase.auth.admin.createUser({
       email,
       password,
-      email_confirm: true, // Creates user as verified immediately. Bypasses email rate limit.
+      email_confirm: true,
       user_metadata: {
         role,
         full_name: fullName,
+        phone: normalizePhone(phone),
       }
     });
 
     if (createError) {
-      // Return 422 with a conflict message if user already exists
-      const isConflict = createError.message.toLowerCase().includes('already') || createError.status === 422;
-      res.status(isConflict ? 422 : 400).json({
+      res.status(400).json({
         status: 'error',
         message: createError.message || 'Failed to create user account',
       });
@@ -229,16 +286,15 @@ router.post('/register-worker', async (req: Request, res: Response): Promise<voi
       return;
     }
 
-    // B. Create row in user_profiles
-    const { error: profileError } = await supabase.from('user_profiles').insert({
+    const { error: profileError } = await supabase.from('user_profiles').upsert({
       id: createData.user.id,
       role,
-      created_at: new Date().toISOString(),
+      full_name: fullName,
       is_active: true,
-    });
+      created_at: new Date().toISOString(),
+    }, { onConflict: 'id' });
 
     if (profileError) {
-      // Rollback user creation to maintain consistency
       await supabase.auth.admin.deleteUser(createData.user.id);
       res.status(500).json({ status: 'error', message: `Profile creation failed: ${profileError.message}` });
       return;
@@ -247,8 +303,58 @@ router.post('/register-worker', async (req: Request, res: Response): Promise<voi
     res.status(200).json({
       status: 'success',
       message: 'Worker registered successfully',
+      data: {
+        user_id: createData.user.id,
+        existed: false,
+      },
     });
 
+  } catch (err: any) {
+    res.status(500).json({ status: 'error', message: err.message || 'Internal server error' });
+  }
+});
+
+router.post('/resolve-worker', async (req: Request, res: Response): Promise<void> => {
+  const { phone } = req.body;
+  if (!phone || typeof phone !== 'string') {
+    res.status(400).json({ status: 'error', message: 'Valid phone number is required' });
+    return;
+  }
+
+  try {
+    const email = buildEmail(phone);
+    const { user, error } = await findUserByEmail(email);
+    if (error) {
+      res.status(500).json({ status: 'error', message: error.message });
+      return;
+    }
+
+    if (!user) {
+      res.status(404).json({ status: 'error', message: 'No account found for this phone number' });
+      return;
+    }
+
+    const { data: profile, error: profileError } = await supabase
+      .from('user_profiles')
+      .select('role, full_name, is_active')
+      .eq('id', user.id)
+      .maybeSingle();
+
+    if (profileError) {
+      res.status(500).json({ status: 'error', message: profileError.message });
+      return;
+    }
+
+    res.status(200).json({
+      status: 'success',
+      data: {
+        user_id: user.id,
+        email: user.email,
+        role: profile?.role ?? user.user_metadata?.role ?? 'asha',
+        full_name: profile?.full_name ?? user.user_metadata?.full_name ?? 'ASHA Worker',
+        is_active: profile?.is_active ?? true,
+      },
+    });
   } catch (err: any) {
     res.status(500).json({ status: 'error', message: err.message || 'Internal server error' });
   }

@@ -82,6 +82,24 @@ class BackendApiService {
     }
   }
 
+  /// Resolves an existing worker account by phone number.
+  static Future<Map<String, dynamic>> resolveWorker({
+    required String phone,
+  }) async {
+    final response = await http.post(
+      Uri.parse('$_baseUrl/api/v1/auth/resolve-worker'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({'phone': phone}),
+    );
+
+    final data = jsonDecode(response.body);
+    if (response.statusCode == 200 && data['status'] == 'success') {
+      return Map<String, dynamic>.from(data['data']);
+    }
+
+    throw Exception(data['message'] ?? 'Failed to resolve worker profile');
+  }
+
   /// Generates a temporary Sync PIN on the backend for device transfer (Admin auth required)
   static Future<String> generateSyncToken({
     required String phone,

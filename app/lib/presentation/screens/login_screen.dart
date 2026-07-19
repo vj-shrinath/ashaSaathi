@@ -27,6 +27,7 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _isBiometricSupported = false;
   bool _isUsingFallback = false;
   bool _isRegisteringBiometric = false;
+  bool _needsRecovery = false;
   String? _registeredName;
 
   bool _isLoading = false;
@@ -68,11 +69,12 @@ class _LoginScreenState extends State<LoginScreen> {
     setState(() {
       _isBiometricSupported = true;
       _registeredName = regName;
-      _isRegisteringBiometric = !setup;
-      _isUsingFallback = !supported;
+      _isRegisteringBiometric = false;
+      _needsRecovery = !setup;
+      _isUsingFallback = !supported || !setup;
     });
 
-    // Auto-trigger biometric challenge if fingerprint is already configured
+    // Auto-trigger biometric challenge if fingerprint is already configured locally
     if (setup) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         _loginWithBiometrics();
@@ -169,6 +171,11 @@ class _LoginScreenState extends State<LoginScreen> {
         return;
       }
 
+      if (_needsRecovery) {
+        await _recoverExistingProfile(phone);
+        return;
+      }
+
       // 2. Generate unique email and strong password
       final generatedEmail = '$phone@gmail.com';
       final generatedPassword = const Uuid().v4();
@@ -236,6 +243,36 @@ class _LoginScreenState extends State<LoginScreen> {
     } catch (e) {
       setState(() {
         _error = 'Registration Error: ${e.toString()}';
+        _isLoading = false;
+      });
+    }
+  }
+
+  Future<void> _recoverExistingProfile(String phone) async {
+    try {
+      final existing = await BackendApiService.resolveWorker(phone: phone);
+      final resolvedName = (existing['full_name'] as String?)?.trim();
+      final resolvedRole = UserRole.fromString((existing['role'] as String?) ?? _role.value);
+
+      if (resolvedName != null && resolvedName.isNotEmpty) {
+        _nameController.text = resolvedName;
+      }
+
+      _showSyncPinDialog(phone);
+
+      if (!mounted) return;
+      setState(() {
+        _registeredName = resolvedName;
+        _isRegisteringBiometric = false;
+        _isUsingFallback = false;
+        _error = null;
+        _isLoading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = 'No existing profile found for this phone. Please register as a new user.';
+        _isRegisteringBiometric = true;
         _isLoading = false;
       });
     }
@@ -382,6 +419,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
       final tempPassword = syncData['temp_password'] as String;
       final fullName = syncData['full_name'] as String? ?? 'ASHA Worker';
+      final backendRole = UserRole.fromString(syncData['role'] as String? ?? _role.value);
       final email = '$phone@gmail.com';
 
       // 2. Sign in with the temporary credentials
@@ -408,21 +446,22 @@ class _LoginScreenState extends State<LoginScreen> {
       await BiometricAuthService.saveCredentials(
         email: email,
         password: newPermanentPassword,
-        role: _role,
+        role: backendRole,
         fullName: fullName,
       );
 
-      await _syncAuthRole(_role);
+      await _syncAuthRole(backendRole);
 
       if (!mounted) return;
       setState(() {
         _registeredName = fullName;
         _isRegisteringBiometric = false;
         _isLoading = false;
+        _needsRecovery = false;
       });
 
       // 5. Navigate to the dashboard
-      context.go(_role.route);
+      context.go(backendRole.route);
 
     } catch (e) {
       setState(() {
@@ -506,7 +545,9 @@ class _LoginScreenState extends State<LoginScreen> {
       children: [
         const SizedBox(height: 16),
         Text(
-          'Welcome Back${_registeredName != null ? ', $_registeredName' : ''}!',
+          _needsRecovery
+              ? 'Device Reset Detected'
+              : 'Welcome Back${_registeredName != null ? ', $_registeredName' : ''}!',
           textAlign: TextAlign.center,
           style: TextStyle(
             fontSize: 22,
@@ -516,7 +557,9 @@ class _LoginScreenState extends State<LoginScreen> {
         ),
         const SizedBox(height: 8),
         Text(
-          'Place your finger on the scanner to unlock',
+          _needsRecovery
+              ? 'This device no longer has your saved biometric profile. Recover your existing account instead of creating a new one.'
+              : 'Place your finger on the scanner to unlock',
           textAlign: TextAlign.center,
           style: TextStyle(color: Colors.grey[600], fontSize: 13),
         ),
@@ -558,10 +601,14 @@ class _LoginScreenState extends State<LoginScreen> {
               onPressed: () {
                 setState(() {
                   _isRegisteringBiometric = true;
+                  _needsRecovery = false;
                 });
               },
               icon: Icon(Icons.person_add_alt_1_rounded, size: 16, color: Colors.grey[600]),
-              label: Text('Register New Profile', style: TextStyle(color: Colors.grey[600], fontSize: 12)),
+              label: Text(
+                _needsRecovery ? 'Re-register Biometric' : 'Register New Profile',
+                style: TextStyle(color: Colors.grey[600], fontSize: 12),
+              ),
             ),
             TextButton.icon(
               onPressed: () {
@@ -581,7 +628,7 @@ class _LoginScreenState extends State<LoginScreen> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Text(
-          'Register Fingerprint Lock',
+          _needsRecovery ? 'Recover Existing Profile' : 'Register Fingerprint Lock',
           style: TextStyle(
             fontSize: 20,
             fontWeight: FontWeight.bold,
@@ -590,7 +637,9 @@ class _LoginScreenState extends State<LoginScreen> {
         ),
         const SizedBox(height: 8),
         Text(
-          'Create your secure biometric profile for $_roleDisplayName portal.',
+          _needsRecovery
+              ? 'Enter the same phone number used before app data was cleared. If the account already exists, we will restore access instead of creating a duplicate profile.'
+              : 'Create your secure biometric profile for $_roleDisplayName portal.',
           style: TextStyle(color: Colors.grey[600], fontSize: 13),
         ),
         const SizedBox(height: 24),
