@@ -264,6 +264,140 @@ router.patch('/admin/phc/:phcId', requireAdmin, async (req: Request, res: Respon
   }
 });
 
+router.post('/admin/phc-admin', requireAdmin, async (req: Request, res: Response): Promise<void> => {
+  const { phone, password, fullName, phc_id } = req.body;
+
+  if (!phone || !password || !fullName || !phc_id) {
+    res.status(400).json({
+      status: 'error',
+      message: 'Phone number, password, full name, and PHC are required',
+    });
+    return;
+  }
+
+  const email = buildEmail(phone);
+
+  try {
+    const { data: phc, error: phcError } = await supabase
+      .from('phcs')
+      .select('id, name, is_active')
+      .eq('id', phc_id)
+      .maybeSingle();
+
+    if (phcError) {
+      res.status(500).json({ status: 'error', message: phcError.message });
+      return;
+    }
+
+    if (!phc || !phc.is_active) {
+      res.status(400).json({ status: 'error', message: 'Selected PHC is not available' });
+      return;
+    }
+
+    const { user: existingUser, error: findError } = await findUserByEmail(email);
+    if (findError) {
+      res.status(500).json({ status: 'error', message: findError.message });
+      return;
+    }
+
+    if (existingUser) {
+      const { error: updateError } = await supabase.auth.admin.updateUserById(existingUser.id, {
+        password,
+        user_metadata: {
+          role: 'admin',
+          full_name: String(fullName).trim(),
+          phone: normalizePhone(phone),
+          phc_id,
+        },
+      });
+
+      if (updateError) {
+        res.status(500).json({ status: 'error', message: `Admin update failed: ${updateError.message}` });
+        return;
+      }
+
+      const { error: profileError } = await supabase.from('user_profiles').upsert({
+        id: existingUser.id,
+        role: 'admin',
+        full_name: String(fullName).trim(),
+        phc_id,
+        doctor_id: null,
+        is_active: true,
+        created_at: new Date().toISOString(),
+      }, { onConflict: 'id' });
+
+      if (profileError) {
+        res.status(500).json({ status: 'error', message: `Admin profile sync failed: ${profileError.message}` });
+        return;
+      }
+
+      res.status(200).json({
+        status: 'success',
+        message: 'PHC admin profile restored successfully',
+        data: {
+          user_id: existingUser.id,
+          phc_id,
+          existed: true,
+        },
+      });
+      return;
+    }
+
+    const { data: createData, error: createError } = await supabase.auth.admin.createUser({
+      email,
+      password,
+      email_confirm: true,
+      user_metadata: {
+        role: 'admin',
+        full_name: String(fullName).trim(),
+        phone: normalizePhone(phone),
+        phc_id,
+      },
+    });
+
+    if (createError) {
+      res.status(400).json({
+        status: 'error',
+        message: createError.message || 'Failed to create admin account',
+      });
+      return;
+    }
+
+    if (!createData.user) {
+      res.status(500).json({ status: 'error', message: 'Admin creation failed' });
+      return;
+    }
+
+    const { error: profileError } = await supabase.from('user_profiles').upsert({
+      id: createData.user.id,
+      role: 'admin',
+      full_name: String(fullName).trim(),
+      phc_id,
+      doctor_id: null,
+      is_active: true,
+      created_at: new Date().toISOString(),
+    }, { onConflict: 'id' });
+
+    if (profileError) {
+      await supabase.auth.admin.deleteUser(createData.user.id);
+      res.status(500).json({ status: 'error', message: `Admin profile creation failed: ${profileError.message}` });
+      return;
+    }
+
+    res.status(200).json({
+      status: 'success',
+      message: 'PHC admin registered successfully',
+      data: {
+        user_id: createData.user.id,
+        phc_id,
+        existed: false,
+      },
+    });
+  } catch (err: any) {
+    res.status(500).json({ status: 'error', message: err.message || 'Internal server error' });
+  }
+});
+
 // ─────────────────────────────────────────────────────────────
 // 2. Public Endpoint: Verify Sync Token (No Auth Needed)
 // ─────────────────────────────────────────────────────────────

@@ -19,7 +19,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 6, vsync: this);
+    _tabController = TabController(length: 7, vsync: this);
   }
 
   @override
@@ -53,6 +53,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
           tabs: const [
             Tab(text: 'OVERVIEW'),
             Tab(text: 'PHC SETUP'),
+            Tab(text: 'PHC ADMIN'),
             Tab(text: 'ASHA ACTIVITY'),
             Tab(text: 'DOCTOR ACTIVITY'),
             Tab(text: 'ALL LOGS'),
@@ -80,6 +81,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
         children: [
           _OverviewTab(),
           const _PhcSetupTab(),
+          const _PhcAdminSetupTab(),
           _ActivityTab(userRole: 'asha', title: 'ASHA Worker Activity'),
           _ActivityTab(userRole: 'doctor', title: 'Doctor Activity'),
           _AllActivityLogsTab(),
@@ -617,6 +619,249 @@ class _PhcSetupTabState extends State<_PhcSetupTab> {
 // ─────────────────────────────────────────────────────────────────────────────
 // ACTIVITY LOG CARD
 // ─────────────────────────────────────────────────────────────────────────────
+class _PhcAdminSetupTab extends StatefulWidget {
+  const _PhcAdminSetupTab();
+
+  @override
+  State<_PhcAdminSetupTab> createState() => _PhcAdminSetupTabState();
+}
+
+class _PhcAdminSetupTabState extends State<_PhcAdminSetupTab> {
+  final _fullNameController = TextEditingController();
+  final _phoneController = TextEditingController();
+  final _passwordController = TextEditingController();
+  String? _selectedPhcId;
+  bool _isLoading = false;
+  bool _isSaving = false;
+  String? _error;
+  Map<String, dynamic>? _createdAdmin;
+  List<Map<String, dynamic>> _phcs = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadPhcs();
+  }
+
+  @override
+  void dispose() {
+    _fullNameController.dispose();
+    _phoneController.dispose();
+    _passwordController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadPhcs() async {
+    setState(() => _isLoading = true);
+    try {
+      final items = await BackendApiService.listPhcs();
+      if (!mounted) return;
+      setState(() {
+        _phcs = items;
+        _selectedPhcId ??= items.isNotEmpty ? items.first['id'] as String? : null;
+        _isLoading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = e.toString().replaceAll('Exception: ', '');
+        _isLoading = false;
+      });
+    }
+  }
+
+  Future<void> _createAdmin() async {
+    final fullName = _fullNameController.text.trim();
+    final phone = _phoneController.text.trim();
+    final password = _passwordController.text.trim();
+    final phcId = _selectedPhcId;
+
+    if (fullName.isEmpty || phone.isEmpty || password.isEmpty || phcId == null) {
+      setState(() => _error = 'Select a PHC and fill all admin details');
+      return;
+    }
+
+    if (phone.length < 10) {
+      setState(() => _error = 'Enter a valid phone number');
+      return;
+    }
+
+    if (password.length < 6) {
+      setState(() => _error = 'Password should be at least 6 characters');
+      return;
+    }
+
+    setState(() {
+      _isSaving = true;
+      _error = null;
+      _createdAdmin = null;
+    });
+
+    try {
+      final session = Supabase.instance.client.auth.currentSession;
+      if (session == null) {
+        setState(() {
+          _error = 'Admin session expired. Please re-login.';
+          _isSaving = false;
+        });
+        return;
+      }
+
+      final admin = await BackendApiService.registerPhcAdmin(
+        phone: phone,
+        password: password,
+        fullName: fullName,
+        phcId: phcId,
+        adminToken: session.accessToken,
+      );
+
+      if (!mounted) return;
+      setState(() {
+        _createdAdmin = admin;
+        _isSaving = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = e.toString().replaceAll('Exception: ', '');
+        _isSaving = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Card(
+            elevation: 4,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            child: Padding(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    children: [
+                      const Icon(Icons.admin_panel_settings_outlined, color: Color(0xFF6A1B9A)),
+                      const SizedBox(width: 12),
+                      const Expanded(
+                        child: Text(
+                          'Create PHC Admin',
+                          style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                        ),
+                      ),
+                      IconButton(
+                        onPressed: _loadPhcs,
+                        icon: const Icon(Icons.refresh_rounded),
+                        tooltip: 'Reload PHCs',
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Register the first admin for a PHC. This admin stays scoped to that center and can later add doctors and ASHAs under the same PHC.',
+                    style: TextStyle(color: Colors.grey[600], fontSize: 12),
+                  ),
+                  const SizedBox(height: 20),
+                  if (_isLoading)
+                    const Center(child: CircularProgressIndicator())
+                  else ...[
+                    DropdownButtonFormField<String>(
+                      value: _selectedPhcId,
+                      items: _phcs
+                          .map(
+                            (phc) => DropdownMenuItem<String>(
+                              value: phc['id'] as String?,
+                              child: Text(
+                                '${phc['name'] ?? 'PHC'} (${phc['code'] ?? ''})',
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          )
+                          .toList(),
+                      onChanged: (value) => setState(() => _selectedPhcId = value),
+                      decoration: const InputDecoration(
+                        labelText: 'Select PHC',
+                        prefixIcon: Icon(Icons.local_hospital_outlined),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    TextField(
+                      controller: _fullNameController,
+                      decoration: const InputDecoration(
+                        labelText: 'Admin Full Name',
+                        prefixIcon: Icon(Icons.badge_outlined),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    TextField(
+                      controller: _phoneController,
+                      keyboardType: TextInputType.phone,
+                      maxLength: 10,
+                      decoration: const InputDecoration(
+                        labelText: 'Admin Phone Number',
+                        counterText: '',
+                        prefixIcon: Icon(Icons.phone_outlined),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    TextField(
+                      controller: _passwordController,
+                      obscureText: true,
+                      decoration: const InputDecoration(
+                        labelText: 'Temporary Password',
+                        prefixIcon: Icon(Icons.lock_outline),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    if (_error != null) ...[
+                      Text(_error!, style: const TextStyle(color: Colors.red)),
+                      const SizedBox(height: 12),
+                    ],
+                    _isSaving
+                        ? const Center(child: CircularProgressIndicator())
+                        : FilledButton.icon(
+                            onPressed: _createAdmin,
+                            icon: const Icon(Icons.person_add_alt_1_outlined),
+                            label: const Text('Create PHC Admin'),
+                          ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+          if (_createdAdmin != null) ...[
+            const SizedBox(height: 24),
+            Card(
+              elevation: 3,
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Admin Created',
+                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(height: 8),
+                    Text('User ID: ${_createdAdmin!['user_id'] ?? ''}'),
+                    Text('PHC ID: ${_createdAdmin!['phc_id'] ?? ''}'),
+                    Text('Already existed: ${_createdAdmin!['existed'] == true ? 'Yes' : 'No'}'),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
 class _ActivityLogCard extends StatelessWidget {
   final ActivityLog log;
 

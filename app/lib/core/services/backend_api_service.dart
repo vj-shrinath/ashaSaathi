@@ -189,6 +189,34 @@ class BackendApiService {
     throw Exception(data['message'] ?? 'Failed to update PHC');
   }
 
+  static Future<Map<String, dynamic>> registerPhcAdmin({
+    required String phone,
+    required String password,
+    required String fullName,
+    required String phcId,
+    required String adminToken,
+  }) async {
+    final response = await http.post(
+      Uri.parse('$_baseUrl/api/v1/auth/admin/phc-admin'),
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer $adminToken',
+      },
+      body: jsonEncode({
+        'phone': phone,
+        'password': password,
+        'fullName': fullName,
+        'phc_id': phcId,
+      }),
+    );
+
+    final data = jsonDecode(response.body);
+    if (response.statusCode == 200 && data['status'] == 'success') {
+      return Map<String, dynamic>.from(data['data']);
+    }
+    throw Exception(data['message'] ?? 'Failed to register PHC admin');
+  }
+
   /// Generates a temporary Sync PIN on the backend for device transfer (Admin auth required)
   static Future<String> generateSyncToken({
     required String phone,
