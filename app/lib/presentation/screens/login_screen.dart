@@ -28,6 +28,7 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _isUsingFallback = false;
   bool _isRegisteringBiometric = false;
   bool _needsRecovery = false;
+  bool _isAdminRegistering = false;
   String? _registeredName;
   List<Map<String, dynamic>> _phcs = [];
   List<Map<String, dynamic>> _doctors = [];
@@ -75,7 +76,9 @@ class _LoginScreenState extends State<LoginScreen> {
         _isUsingFallback = true;
         _selectedPhcId = null;
         _selectedDoctorId = null;
+        _isAdminRegistering = false;
       });
+      await _loadOrgData();
       return;
     }
 
@@ -104,7 +107,6 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   Future<void> _loadOrgData() async {
-    if (_role == UserRole.admin) return;
     setState(() => _isLoadingOrgData = true);
     try {
       final phcs = await BackendApiService.listPhcs();
@@ -547,12 +549,17 @@ class _LoginScreenState extends State<LoginScreen> {
 
   /// Standard fallback email/password login for admin/doctor/testing
   Future<void> _fallbackLogin() async {
-    final email = _emailController.text.trim();
+    var email = _emailController.text.trim();
     final password = _passwordController.text.trim();
 
     if (email.isEmpty || password.isEmpty) {
       setState(() => _error = 'Enter email and password');
       return;
+    }
+
+    // Support phone number in email field
+    if (RegExp(r'^\d{10}$').hasMatch(email)) {
+      email = '$email@gmail.com';
     }
 
     setState(() {
@@ -587,6 +594,80 @@ class _LoginScreenState extends State<LoginScreen> {
     } catch (e) {
       setState(() {
         _error = 'Error: ${e.toString()}';
+        _isLoading = false;
+      });
+    }
+  }
+
+  Future<void> _registerAdmin() async {
+    final name = _nameController.text.trim();
+    final phone = _phoneController.text.trim();
+    final password = _passwordController.text.trim();
+
+    if (name.isEmpty) {
+      setState(() => _error = 'Please enter your Full Name');
+      return;
+    }
+    if (phone.isEmpty || phone.length < 10) {
+      setState(() => _error = 'Please enter a valid 10-digit Phone Number');
+      return;
+    }
+    if (password.isEmpty || password.length < 6) {
+      setState(() => _error = 'Password should be at least 6 characters');
+      return;
+    }
+
+    setState(() {
+      _isLoading = true;
+      _error = null;
+    });
+
+    try {
+      final generatedEmail = '$phone@gmail.com';
+
+      // Register user profile using Node Backend to bypass confirmation email rate limits
+      await BackendApiService.registerWorker(
+        phone: phone,
+        password: password,
+        fullName: name,
+        role: 'admin',
+        phcId: null,
+        doctorId: null,
+      );
+
+      // Sign in the newly created account
+      final response = await _supabase.auth.signInWithPassword(
+        email: generatedEmail,
+        password: password,
+      );
+
+      final currentUser = response.user;
+      if (currentUser == null) {
+        setState(() {
+          _error = 'Admin account created, but automatic sign in failed.';
+          _isLoading = false;
+        });
+        return;
+      }
+
+      await _syncAuthRole(UserRole.admin);
+
+      if (!mounted) return;
+      setState(() {
+        _isLoading = false;
+      });
+
+      // Redirect user to admin dashboard
+      context.go(UserRole.admin.route);
+
+    } on AuthException catch (e) {
+      setState(() {
+        _error = e.message;
+        _isLoading = false;
+      });
+    } catch (e) {
+      setState(() {
+        _error = 'Registration Error: ${e.toString()}';
         _isLoading = false;
       });
     }
@@ -852,12 +933,12 @@ class _LoginScreenState extends State<LoginScreen> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Text(
-          '$_roleDisplayName Email Login',
+          '$_roleDisplayName Login',
           style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: _roleColor),
         ),
         const SizedBox(height: 8),
         Text(
-          'Sign in with email and password for $_roleDisplayName portal.',
+          'Sign in with phone number or email and password for $_roleDisplayName portal.',
           style: TextStyle(color: Colors.grey[600], fontSize: 13),
         ),
         const SizedBox(height: 24),
@@ -865,7 +946,8 @@ class _LoginScreenState extends State<LoginScreen> {
           controller: _emailController,
           keyboardType: TextInputType.emailAddress,
           decoration: InputDecoration(
-            labelText: 'Email',
+            labelText: 'Phone Number or Email',
+            hintText: 'e.g. 9876543210 or admin@gmail.com',
             prefixIcon: Icon(Icons.email_outlined, color: _roleColor),
             border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
             focusedBorder: OutlineInputBorder(
@@ -914,6 +996,118 @@ class _LoginScreenState extends State<LoginScreen> {
             label: Text('Switch to Fingerprint Login', style: TextStyle(color: _roleColor, fontSize: 13)),
           ),
         ],
+        if (_role == UserRole.admin) ...[
+          const SizedBox(height: 16),
+          TextButton(
+            onPressed: () {
+              setState(() {
+                _isAdminRegistering = true;
+                _error = null;
+              });
+            },
+            child: Text(
+              'Don\'t have an admin account? Register',
+              style: TextStyle(color: _roleColor, fontSize: 13, fontWeight: FontWeight.w600),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildAdminRegistrationFields() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(
+          'Register Admin Profile',
+          style: TextStyle(
+            fontSize: 20,
+            fontWeight: FontWeight.bold,
+            color: _roleColor,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          'Create your admin account. You will log in using your phone number or email and password.',
+          style: TextStyle(color: Colors.grey[600], fontSize: 13),
+        ),
+        const SizedBox(height: 24),
+        TextField(
+          controller: _nameController,
+          textCapitalization: TextCapitalization.words,
+          decoration: InputDecoration(
+            labelText: 'Full Name',
+            hintText: 'e.g. Radha Devi',
+            prefixIcon: Icon(Icons.person_outline, color: _roleColor),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: BorderSide(color: _roleColor, width: 2),
+            ),
+          ),
+        ),
+        const SizedBox(height: 16),
+        TextField(
+          controller: _phoneController,
+          keyboardType: TextInputType.phone,
+          maxLength: 10,
+          decoration: InputDecoration(
+            labelText: 'Phone Number',
+            hintText: '10-digit mobile number',
+            counterText: '',
+            prefixIcon: Icon(Icons.phone_outlined, color: _roleColor),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: BorderSide(color: _roleColor, width: 2),
+            ),
+          ),
+        ),
+        const SizedBox(height: 16),
+        TextField(
+          controller: _passwordController,
+          obscureText: true,
+          decoration: InputDecoration(
+            labelText: 'Password',
+            hintText: 'At least 6 characters',
+            prefixIcon: Icon(Icons.lock_outline, color: _roleColor),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: BorderSide(color: _roleColor, width: 2),
+            ),
+          ),
+        ),
+        const SizedBox(height: 24),
+        _isLoading
+            ? Center(child: CircularProgressIndicator(color: _roleColor))
+            : FilledButton(
+                onPressed: _registerAdmin,
+                style: FilledButton.styleFrom(
+                  backgroundColor: _roleColor,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+                child: const Text(
+                  'Register Admin Account',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                ),
+              ),
+        const SizedBox(height: 16),
+        TextButton(
+          onPressed: () {
+            setState(() {
+              _isAdminRegistering = false;
+              _error = null;
+            });
+          },
+          child: Text(
+            'Already have an admin account? Sign In',
+            style: TextStyle(color: _roleColor, fontWeight: FontWeight.w600),
+          ),
+        ),
       ],
     );
   }
@@ -1036,12 +1230,15 @@ class _LoginScreenState extends State<LoginScreen> {
                             const SizedBox(height: 16),
                           ],
                           // Render correct state fields dynamically
-                          if (_role == UserRole.admin || _isUsingFallback)
-                            _buildFallbackLoginFields()
-                          else if (_isRegisteringBiometric)
-                            _buildBiometricRegistrationFields()
-                          else
-                            _buildBiometricLoginFields(),
+                          _role == UserRole.admin
+                              ? (_isAdminRegistering
+                                  ? _buildAdminRegistrationFields()
+                                  : _buildFallbackLoginFields())
+                              : (_isUsingFallback
+                                  ? _buildFallbackLoginFields()
+                                  : (_isRegisteringBiometric
+                                      ? _buildBiometricRegistrationFields()
+                                      : _buildBiometricLoginFields())),
                         ],
                       ),
                     ),

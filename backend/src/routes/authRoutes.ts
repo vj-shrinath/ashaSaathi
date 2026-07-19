@@ -193,6 +193,40 @@ router.get('/phcs/:phcId/doctors', async (req: Request, res: Response): Promise<
   }
 });
 
+router.post('/public-phc', async (req: Request, res: Response): Promise<void> => {
+  const { name, district, taluka, village, address } = req.body;
+  if (!name || !district || !taluka || !village || !address) {
+    res.status(400).json({ status: 'error', message: 'PHC name, district, taluka, village, and address are required' });
+    return;
+  }
+
+  try {
+    const code = buildPhcCode(String(district), String(taluka), String(village), String(name));
+    const { data, error } = await supabase
+      .from('phcs')
+      .upsert({
+        name: String(name).trim(),
+        code,
+        district: String(district).trim(),
+        taluka: String(taluka).trim(),
+        village: String(village).trim(),
+        address: String(address).trim(),
+        is_active: true,
+      }, { onConflict: 'code' })
+      .select('id, name, code, district, taluka, village, address, is_active, created_at')
+      .single();
+
+    if (error) {
+      res.status(500).json({ status: 'error', message: error.message });
+      return;
+    }
+
+    res.status(200).json({ status: 'success', data });
+  } catch (err: any) {
+    res.status(500).json({ status: 'error', message: err.message || 'Internal server error' });
+  }
+});
+
 router.post('/admin/phc', requireAdmin, async (req: Request, res: Response): Promise<void> => {
   const { name, district, taluka, village, address } = req.body;
   if (!name || !district || !taluka || !village || !address) {
@@ -472,7 +506,8 @@ router.post('/verify-sync-token', async (req: Request, res: Response): Promise<v
 router.post('/register-worker', async (req: Request, res: Response): Promise<void> => {
   const { phone, password, fullName, role, phc_id, doctor_id } = req.body;
 
-  if (!phone || !password || !fullName || !role || !phc_id) {
+  // Make phc_id optional if registration role is admin
+  if (!phone || !password || !fullName || !role || (role !== 'admin' && !phc_id)) {
     res.status(400).json({ status: 'error', message: 'All registration parameters are required' });
     return;
   }
@@ -480,20 +515,24 @@ router.post('/register-worker', async (req: Request, res: Response): Promise<voi
   const email = buildEmail(phone);
 
   try {
-    const { data: phc, error: phcError } = await supabase
-      .from('phcs')
-      .select('id, name, is_active')
-      .eq('id', phc_id)
-      .maybeSingle();
+    let resolvedPhcId: string | null = null;
+    if (phc_id) {
+      const { data: phc, error: phcError } = await supabase
+        .from('phcs')
+        .select('id, name, is_active')
+        .eq('id', phc_id)
+        .maybeSingle();
 
-    if (phcError) {
-      res.status(500).json({ status: 'error', message: phcError.message });
-      return;
-    }
+      if (phcError) {
+        res.status(500).json({ status: 'error', message: phcError.message });
+        return;
+      }
 
-    if (!phc || !phc.is_active) {
-      res.status(400).json({ status: 'error', message: 'Selected PHC is not available' });
-      return;
+      if (!phc || !phc.is_active) {
+        res.status(400).json({ status: 'error', message: 'Selected PHC is not available' });
+        return;
+      }
+      resolvedPhcId = phc.id;
     }
 
     if (role === 'asha' && !doctor_id) {
@@ -507,7 +546,7 @@ router.post('/register-worker', async (req: Request, res: Response): Promise<voi
         .select('id, role, phc_id, is_active')
         .eq('id', doctor_id)
         .eq('role', 'doctor')
-        .eq('phc_id', phc_id)
+        .eq('phc_id', resolvedPhcId)
         .eq('is_active', true)
         .maybeSingle();
 
@@ -535,7 +574,7 @@ router.post('/register-worker', async (req: Request, res: Response): Promise<voi
           role,
           full_name: fullName,
           phone: normalizePhone(phone),
-          phc_id,
+          phc_id: resolvedPhcId ?? null,
           doctor_id: doctor_id ?? null,
         },
       });
@@ -549,7 +588,7 @@ router.post('/register-worker', async (req: Request, res: Response): Promise<voi
         id: existingUser.id,
         role,
         full_name: fullName,
-        phc_id,
+        phc_id: resolvedPhcId ?? null,
         doctor_id: doctor_id ?? null,
         is_active: true,
         created_at: new Date().toISOString(),
@@ -580,7 +619,7 @@ router.post('/register-worker', async (req: Request, res: Response): Promise<voi
         role,
         full_name: fullName,
         phone: normalizePhone(phone),
-        phc_id,
+        phc_id: resolvedPhcId ?? null,
         doctor_id: doctor_id ?? null,
       }
     });
@@ -602,7 +641,7 @@ router.post('/register-worker', async (req: Request, res: Response): Promise<voi
       id: createData.user.id,
       role,
       full_name: fullName,
-      phc_id,
+      phc_id: resolvedPhcId ?? null,
       doctor_id: doctor_id ?? null,
       is_active: true,
       created_at: new Date().toISOString(),

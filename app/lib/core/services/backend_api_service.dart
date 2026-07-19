@@ -53,7 +53,7 @@ class BackendApiService {
     required String password,
     required String fullName,
     required String role,
-    required String phcId,
+    String? phcId,
     String? doctorId,
   }) async {
     final response = await http.post(
@@ -215,6 +215,32 @@ class BackendApiService {
       return Map<String, dynamic>.from(data['data']);
     }
     throw Exception(data['message'] ?? 'Failed to register PHC admin');
+  }
+
+  static Future<Map<String, dynamic>> createPhcPublic({
+    required String name,
+    required String district,
+    required String taluka,
+    required String village,
+    required String address,
+  }) async {
+    final response = await http.post(
+      Uri.parse('$_baseUrl/api/v1/auth/public-phc'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'name': name,
+        'district': district,
+        'taluka': taluka,
+        'village': village,
+        'address': address,
+      }),
+    );
+
+    final data = jsonDecode(response.body);
+    if (response.statusCode == 200 && data['status'] == 'success') {
+      return Map<String, dynamic>.from(data['data']);
+    }
+    throw Exception(data['message'] ?? 'Failed to create public PHC');
   }
 
   /// Generates a temporary Sync PIN on the backend for device transfer (Admin auth required)
