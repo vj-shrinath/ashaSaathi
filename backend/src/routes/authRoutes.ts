@@ -589,6 +589,7 @@ router.post('/register-worker', async (req: Request, res: Response): Promise<voi
         role,
         full_name: fullName,
         phc_id: resolvedPhcId ?? null,
+        doctor_id: doctor_id ?? null,
         is_active: true,
         created_at: new Date().toISOString(),
       }, { onConflict: 'id' });
@@ -641,6 +642,7 @@ router.post('/register-worker', async (req: Request, res: Response): Promise<voi
       role,
       full_name: fullName,
       phc_id: resolvedPhcId ?? null,
+      doctor_id: doctor_id ?? null,
       is_active: true,
       created_at: new Date().toISOString(),
     }, { onConflict: 'id' });
