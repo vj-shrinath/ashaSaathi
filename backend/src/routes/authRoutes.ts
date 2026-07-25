@@ -29,7 +29,7 @@ const findUserByEmail = async (email: string) => {
 const getAdminProfile = async (adminId: string) => {
   const { data: profile, error } = await supabase
     .from('user_profiles')
-    .select('id, role, phc_id, full_name, is_active')
+    .select('id, role, phc_id, full_name, is_active, must_change_password')
     .eq('id', adminId)
     .maybeSingle();
 
@@ -76,80 +76,11 @@ const requireAdmin = async (req: Request, res: Response, next: NextFunction): Pr
 // ─────────────────────────────────────────────────────────────
 // 1. Admin Endpoint: Generate Sync Token (Admin Auth Required)
 // ─────────────────────────────────────────────────────────────
-router.post('/admin/generate-sync-token', requireAdmin, async (req: Request, res: Response): Promise<void> => {
-  const { phone } = req.body;
-
-  if (!phone || typeof phone !== 'string') {
-    res.status(400).json({ status: 'error', message: 'Valid phone number is required' });
-    return;
-  }
-
-  const email = buildEmail(phone);
-
-  try {
-    // A. Check if the user exists in Supabase Auth using admin client
-    const { user: matchedUser, error: findError } = await findUserByEmail(email);
-    if (findError) {
-       res.status(500).json({ status: 'error', message: findError.message });
-       return;
-    }
-    if (!matchedUser) {
-      res.status(404).json({ status: 'error', message: 'Employee user account not found for this phone number' });
-      return;
-    }
-
-    // B. Generate 6-digit PIN and secure temp password
-    const pin = crypto.randomInt(100000, 999999).toString();
-    const tempPassword = crypto.randomUUID();
-
-    // C. Perform password rewrite on Supabase Auth (admin privileges)
-    const { error: updateError } = await supabase.auth.admin.updateUserById(matchedUser.id, {
-      password: tempPassword,
-    });
-
-    if (updateError) {
-      res.status(500).json({ status: 'error', message: `Update failed: ${updateError.message}` });
-      return;
-    }
-
-    // D. Invalidate any existing active sync tokens for this phone
-    await supabase
-      .from('device_sync_tokens')
-      .update({ is_used: true })
-      .eq('phone', phone)
-      .eq('is_used', false);
-
-    // E. Save Sync Token to database
-    const expiresAt = new Date();
-    expiresAt.setMinutes(expiresAt.getMinutes() + 10); // Expires in 10 minutes
-
-    const { error: insertError } = await supabase
-      .from('device_sync_tokens')
-      .insert({
-        phone,
-        pin,
-        temp_password: tempPassword,
-        expires_at: expiresAt.toISOString(),
-        is_used: false,
-      });
-
-    if (insertError) {
-      res.status(500).json({ status: 'error', message: `Database insert failed: ${insertError.message}` });
-      return;
-    }
-
-    // F. Return generated PIN for visual rendering on Admin screen
-    res.status(200).json({
-      status: 'success',
-      data: {
-        pin,
-        expires_at: expiresAt.toISOString(),
-      },
-    });
-
-  } catch (err: any) {
-    res.status(500).json({ status: 'error', message: err.message || 'Internal server error' });
-  }
+router.post('/admin/generate-sync-token', requireAdmin, async (_req: Request, res: Response): Promise<void> => {
+  res.status(410).json({
+    status: 'error',
+    message: 'Device sync has been removed. Use admin-managed password reset instead.',
+  });
 });
 
 router.get('/phcs', async (_req: Request, res: Response): Promise<void> => {
@@ -299,17 +230,21 @@ router.patch('/admin/phc/:phcId', requireAdmin, async (req: Request, res: Respon
 });
 
 router.post('/admin/phc-admin', requireAdmin, async (req: Request, res: Response): Promise<void> => {
-  const { phone, password, fullName, phc_id } = req.body;
+  const { email, phone, password, fullName, phc_id } = req.body;
 
-  if (!phone || !password || !fullName || !phc_id) {
+  if (!email || !phone || !password || !fullName || !phc_id) {
     res.status(400).json({
       status: 'error',
-      message: 'Phone number, password, full name, and PHC are required',
+      message: 'Email, phone number, password, full name, and PHC are required',
     });
     return;
   }
 
-  const email = buildEmail(phone);
+  const normalizedEmail = String(email).trim().toLowerCase();
+  if (!normalizedEmail.includes('@')) {
+    res.status(400).json({ status: 'error', message: 'A valid admin email is required' });
+    return;
+  }
 
   try {
     const { data: phc, error: phcError } = await supabase
@@ -328,7 +263,7 @@ router.post('/admin/phc-admin', requireAdmin, async (req: Request, res: Response
       return;
     }
 
-    const { user: existingUser, error: findError } = await findUserByEmail(email);
+    const { user: existingUser, error: findError } = await findUserByEmail(normalizedEmail);
     if (findError) {
       res.status(500).json({ status: 'error', message: findError.message });
       return;
@@ -371,6 +306,7 @@ router.post('/admin/phc-admin', requireAdmin, async (req: Request, res: Response
         data: {
           user_id: existingUser.id,
           phc_id,
+          email: normalizedEmail,
           existed: true,
         },
       });
@@ -378,7 +314,7 @@ router.post('/admin/phc-admin', requireAdmin, async (req: Request, res: Response
     }
 
     const { data: createData, error: createError } = await supabase.auth.admin.createUser({
-      email,
+      email: normalizedEmail,
       password,
       email_confirm: true,
       user_metadata: {
@@ -424,6 +360,7 @@ router.post('/admin/phc-admin', requireAdmin, async (req: Request, res: Response
       data: {
         user_id: createData.user.id,
         phc_id,
+          email: normalizedEmail,
         existed: false,
       },
     });
@@ -435,309 +372,111 @@ router.post('/admin/phc-admin', requireAdmin, async (req: Request, res: Response
 // ─────────────────────────────────────────────────────────────
 // 2. Public Endpoint: Verify Sync Token (No Auth Needed)
 // ─────────────────────────────────────────────────────────────
-router.post('/verify-sync-token', async (req: Request, res: Response): Promise<void> => {
-  const { phone, pin } = req.body;
-
-  if (!phone || !pin) {
-    res.status(400).json({ status: 'error', message: 'Phone number and verification PIN are required' });
-    return;
-  }
-
-  try {
-    // A. Query database for unexpired, unused token matching phone and PIN
-    const { data: tokenRecord, error: fetchError } = await supabase
-      .from('device_sync_tokens')
-      .select('*')
-      .eq('phone', phone)
-      .eq('pin', pin)
-      .eq('is_used', false)
-      .gt('expires_at', new Date().toISOString())
-      .maybeSingle();
-
-    if (fetchError || !tokenRecord) {
-      res.status(400).json({ status: 'error', message: 'Synchronization code is invalid or has expired' });
-      return;
-    }
-
-    // B. Mark token as consumed
-    const { error: updateTokenError } = await supabase
-      .from('device_sync_tokens')
-      .update({ is_used: true })
-      .eq('id', tokenRecord.id);
-
-    if (updateTokenError) {
-      res.status(500).json({ status: 'error', message: 'Verification error' });
-      return;
-    }
-
-    // C. Get user metadata (e.g. name) to pass back to the client
-    const email = buildEmail(phone);
-    const { user, error: listError } = await findUserByEmail(email);
-    
-    let fullName = 'ASHA Worker';
-    let role = 'asha';
-    if (!listError && user) {
-      if (user.user_metadata && user.user_metadata.full_name) {
-        fullName = user.user_metadata.full_name;
-      }
-      if (user.user_metadata && user.user_metadata.role) {
-        role = user.user_metadata.role;
-      }
-    }
-
-    // D. Return the authorized temp password back to the setup client
-    res.status(200).json({
-      status: 'success',
-      data: {
-        temp_password: tokenRecord.temp_password,
-        full_name: fullName,
-        role,
-      },
-    });
-
-  } catch (err: any) {
-    res.status(500).json({ status: 'error', message: err.message || 'Internal server error' });
-  }
+router.post('/verify-sync-token', async (_req: Request, res: Response): Promise<void> => {
+  res.status(410).json({
+    status: 'error',
+    message: 'Device sync has been removed.',
+  });
 });
 
 // ─────────────────────────────────────────────────────────────
 // 3. Public Endpoint: Register Worker (Bypasses email SMTP/rate limits)
 // ─────────────────────────────────────────────────────────────
-router.post('/register-worker', async (req: Request, res: Response): Promise<void> => {
-  const { phone, password, fullName, role, phc_id, doctor_id } = req.body;
+router.post('/register-worker', requireAdmin, async (req: Request, res: Response): Promise<void> => {
+  const { email, fullName, role, phc_id, doctor_id } = req.body;
 
-  // Make phc_id optional if registration role is admin
-  if (!phone || !password || !fullName || !role || (role !== 'admin' && !phc_id)) {
-    res.status(400).json({ status: 'error', message: 'All registration parameters are required' });
+  if (!email || !fullName || !role) {
+    res.status(400).json({ status: 'error', message: 'Email, full name, and role are required' });
     return;
   }
 
-  const email = buildEmail(phone);
+  if (!['asha', 'doctor', 'admin'].includes(role)) {
+    res.status(400).json({ status: 'error', message: 'Invalid role' });
+    return;
+  }
+
+  const normalizedEmail = String(email).trim().toLowerCase();
+  const tempPassword = crypto.randomBytes(12).toString('base64url');
 
   try {
-    if (role === 'admin') {
-      const { data: existingAdmins, error: adminCheckError } = await supabase
-        .from('user_profiles')
-        .select('id')
-        .eq('role', 'admin');
-
-      if (adminCheckError) {
-        res.status(500).json({ status: 'error', message: adminCheckError.message });
-        return;
-      }
-
-      if (existingAdmins && existingAdmins.length > 0) {
-        const { user: existingUser } = await findUserByEmail(email);
-        const isSelfRestoration = existingUser && existingAdmins.some((adm: any) => adm.id === existingUser.id);
-
-        if (!isSelfRestoration) {
-          res.status(403).json({
-            status: 'error',
-            message: 'An administrator account has already been registered on this system. Public admin registration is disabled.'
-          });
-          return;
-        }
-      }
-    }
-
-    let resolvedPhcId: string | null = null;
-    if (phc_id) {
-      const { data: phc, error: phcError } = await supabase
-        .from('phcs')
-        .select('id, name, is_active')
-        .eq('id', phc_id)
-        .maybeSingle();
-
-      if (phcError) {
-        res.status(500).json({ status: 'error', message: phcError.message });
-        return;
-      }
-
-      if (!phc || !phc.is_active) {
-        res.status(400).json({ status: 'error', message: 'Selected PHC is not available' });
-        return;
-      }
-      resolvedPhcId = phc.id;
-    }
-
-    if (role === 'asha' && !doctor_id) {
-      res.status(400).json({ status: 'error', message: 'Doctor selection is required for ASHA workers' });
-      return;
-    }
-
-    if (role === 'asha') {
-      const { data: doctorProfile, error: doctorError } = await supabase
-        .from('user_profiles')
-        .select('id, role, phc_id, is_active')
-        .eq('id', doctor_id)
-        .eq('role', 'doctor')
-        .eq('phc_id', resolvedPhcId)
-        .eq('is_active', true)
-        .maybeSingle();
-
-      if (doctorError) {
-        res.status(500).json({ status: 'error', message: doctorError.message });
-        return;
-      }
-
-      if (!doctorProfile) {
-        res.status(400).json({ status: 'error', message: 'Selected doctor does not belong to this PHC' });
-        return;
-      }
-    }
-
-    const { user: existingUser, error: findError } = await findUserByEmail(email);
+    const { user: existingUser, error: findError } = await findUserByEmail(normalizedEmail);
     if (findError) {
       res.status(500).json({ status: 'error', message: findError.message });
       return;
     }
 
-    if (existingUser) {
-      const { error: updateUserError } = await supabase.auth.admin.updateUserById(existingUser.id, {
-        password,
+    let userId = existingUser?.id;
+
+    if (!existingUser) {
+      const { data: createData, error: createError } = await supabase.auth.admin.createUser({
+        email: normalizedEmail,
+        password: tempPassword,
+        email_confirm: true,
         user_metadata: {
-          role,
-          full_name: fullName,
-          phone: normalizePhone(phone),
-          phc_id: resolvedPhcId ?? null,
-          doctor_id: doctor_id ?? null,
+          full_name: String(fullName).trim(),
         },
       });
 
-      if (updateUserError) {
-        res.status(500).json({ status: 'error', message: `Profile update failed: ${updateUserError.message}` });
+      if (createError) {
+        res.status(400).json({ status: 'error', message: createError.message || 'Failed to create user account' });
         return;
       }
 
-      const { error: profileError } = await supabase.from('user_profiles').upsert({
-        id: existingUser.id,
-        role,
-        full_name: fullName,
-        phc_id: resolvedPhcId ?? null,
-        doctor_id: doctor_id ?? null,
-        is_active: true,
-        created_at: new Date().toISOString(),
-      }, { onConflict: 'id' });
-
-      if (profileError) {
-        res.status(500).json({ status: 'error', message: `Profile sync failed: ${profileError.message}` });
-        return;
-      }
-
-      res.status(200).json({
-        status: 'success',
-        message: 'Worker profile restored successfully',
-        data: {
-          user_id: existingUser.id,
-          existed: true,
+      userId = createData.user?.id;
+    } else {
+      const { error: updateError } = await supabase.auth.admin.updateUserById(existingUser.id, {
+        password: tempPassword,
+        user_metadata: {
+          full_name: String(fullName).trim(),
         },
       });
-      return;
-    }
 
-    // A. Use admin API to create the user directly (bypassing confirmation emails)
-    const { data: createData, error: createError } = await supabase.auth.admin.createUser({
-      email,
-      password,
-      email_confirm: true,
-      user_metadata: {
-        role,
-        full_name: fullName,
-        phone: normalizePhone(phone),
-        phc_id: resolvedPhcId ?? null,
-        doctor_id: doctor_id ?? null,
+      if (updateError) {
+        res.status(500).json({ status: 'error', message: updateError.message });
+        return;
       }
-    });
-
-    if (createError) {
-      res.status(400).json({
-        status: 'error',
-        message: createError.message || 'Failed to create user account',
-      });
-      return;
     }
 
-    if (!createData.user) {
-      res.status(500).json({ status: 'error', message: 'User generation failed' });
+    if (!userId) {
+      res.status(500).json({ status: 'error', message: 'Unable to determine created user id' });
       return;
     }
 
     const { error: profileError } = await supabase.from('user_profiles').upsert({
-      id: createData.user.id,
+      id: userId,
       role,
-      full_name: fullName,
-      phc_id: resolvedPhcId ?? null,
+      full_name: String(fullName).trim(),
+      phc_id: phc_id ?? null,
       doctor_id: doctor_id ?? null,
       is_active: true,
+      must_change_password: true,
       created_at: new Date().toISOString(),
     }, { onConflict: 'id' });
 
     if (profileError) {
-      await supabase.auth.admin.deleteUser(createData.user.id);
-      res.status(500).json({ status: 'error', message: `Profile creation failed: ${profileError.message}` });
+      res.status(500).json({ status: 'error', message: `Profile sync failed: ${profileError.message}` });
       return;
     }
 
     res.status(200).json({
       status: 'success',
-      message: 'Worker registered successfully',
+      message: existingUser ? 'Worker password reset successfully' : 'Worker account created successfully',
       data: {
-        user_id: createData.user.id,
-        existed: false,
+        user_id: userId,
+        temp_password: tempPassword,
+        existed: Boolean(existingUser),
       },
     });
-
   } catch (err: any) {
     res.status(500).json({ status: 'error', message: err.message || 'Internal server error' });
   }
 });
 
 router.post('/resolve-worker', async (req: Request, res: Response): Promise<void> => {
-  const { phone } = req.body;
-  if (!phone || typeof phone !== 'string') {
-    res.status(400).json({ status: 'error', message: 'Valid phone number is required' });
-    return;
-  }
-
-  try {
-    const email = buildEmail(phone);
-    const { user, error } = await findUserByEmail(email);
-    if (error) {
-      res.status(500).json({ status: 'error', message: error.message });
-      return;
-    }
-
-    if (!user) {
-      res.status(404).json({ status: 'error', message: 'No account found for this phone number' });
-      return;
-    }
-
-    const { data: profile, error: profileError } = await supabase
-      .from('user_profiles')
-      .select('role, full_name, phc_id, doctor_id, is_active')
-      .eq('id', user.id)
-      .maybeSingle();
-
-    if (profileError) {
-      res.status(500).json({ status: 'error', message: profileError.message });
-      return;
-    }
-
-    res.status(200).json({
-      status: 'success',
-      data: {
-        user_id: user.id,
-        email: user.email,
-        role: profile?.role ?? user.user_metadata?.role ?? 'asha',
-        full_name: profile?.full_name ?? user.user_metadata?.full_name ?? 'ASHA Worker',
-        phc_id: profile?.phc_id ?? user.user_metadata?.phc_id ?? null,
-        doctor_id: profile?.doctor_id ?? user.user_metadata?.doctor_id ?? null,
-        is_active: profile?.is_active ?? true,
-      },
-    });
-  } catch (err: any) {
-    res.status(500).json({ status: 'error', message: err.message || 'Internal server error' });
-  }
+  res.status(410).json({
+    status: 'error',
+    message: 'Worker resolution is no longer public.',
+  });
 });
 
 export default router;
