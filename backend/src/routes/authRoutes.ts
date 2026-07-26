@@ -472,6 +472,88 @@ router.post('/register-worker', requireAdmin, async (req: Request, res: Response
   }
 });
 
+router.post('/complete-password-change', async (req: Request, res: Response): Promise<void> => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    res.status(401).json({ status: 'error', message: 'No authorization token provided' });
+    return;
+  }
+
+  const token = authHeader.split(' ')[1];
+  const { newPassword } = req.body;
+
+  if (!newPassword || String(newPassword).trim().length < 8) {
+    res.status(400).json({ status: 'error', message: 'New password must be at least 8 characters' });
+    return;
+  }
+
+  try {
+    const {
+      data: { user },
+      error,
+    } = await supabase.auth.getUser(token);
+
+    if (error || !user) {
+      res.status(401).json({ status: 'error', message: 'Invalid or expired session' });
+      return;
+    }
+
+    const { data: profile, error: profileError } = await supabase
+      .from('user_profiles')
+      .select('id, role, full_name, phc_id, doctor_id, is_active, must_change_password, created_at')
+      .eq('id', user.id)
+      .maybeSingle();
+
+    if (profileError) {
+      res.status(500).json({ status: 'error', message: profileError.message });
+      return;
+    }
+
+    if (!profile) {
+      res.status(404).json({ status: 'error', message: 'User profile not found' });
+      return;
+    }
+
+    const { error: passwordError } = await supabase.auth.admin.updateUserById(user.id, {
+      password: String(newPassword),
+    });
+
+    if (passwordError) {
+      res.status(500).json({ status: 'error', message: passwordError.message });
+      return;
+    }
+
+    const { error: syncError } = await supabase.from('user_profiles').upsert({
+      id: profile.id,
+      role: profile.role,
+      full_name: profile.full_name ?? null,
+      phc_id: profile.phc_id ?? null,
+      doctor_id: profile.doctor_id ?? null,
+      is_active: profile.is_active ?? true,
+      must_change_password: false,
+      password_changed_at: new Date().toISOString(),
+      created_at: profile.created_at ?? new Date().toISOString(),
+    }, { onConflict: 'id' });
+
+    if (syncError) {
+      res.status(500).json({ status: 'error', message: `Password updated but profile sync failed: ${syncError.message}` });
+      return;
+    }
+
+    res.status(200).json({
+      status: 'success',
+      message: 'Password changed successfully',
+      data: {
+        user_id: profile.id,
+        role: profile.role,
+        must_change_password: false,
+      },
+    });
+  } catch (err: any) {
+    res.status(500).json({ status: 'error', message: err.message || 'Internal server error' });
+  }
+});
+
 router.post('/resolve-worker', async (req: Request, res: Response): Promise<void> => {
   res.status(410).json({
     status: 'error',
