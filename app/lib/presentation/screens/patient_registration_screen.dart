@@ -66,7 +66,7 @@ class _PatientRegistrationScreenState extends State<PatientRegistrationScreen> {
         village: _villageCtrl.text.trim(),
         registerType: _selectedRegister,
         ashaId: ashaId,
-      lastMessage: 'Task record added',
+        lastMessage: 'Task record added',
         lastMessageTime: DateTime.now(),
       );
 
@@ -150,7 +150,7 @@ class _PatientRegistrationScreenState extends State<PatientRegistrationScreen> {
                             const Spacer(),
                             Text(option.label, style: const TextStyle(fontWeight: FontWeight.w700)),
                             const SizedBox(height: 4),
-                            Text(option.subtitle, maxLines: 2, overflow: TextOverflow.ellipsis),
+                            Text(option.subtitle, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 11, color: Colors.black54)),
                           ],
                         ),
                       ),
@@ -205,7 +205,7 @@ class _PatientRegistrationScreenState extends State<PatientRegistrationScreen> {
                 controller: _villageCtrl,
                 textCapitalization: TextCapitalization.words,
                 decoration: InputDecoration(
-                        labelText: 'Village / Area *',
+                  labelText: 'Village / Area *',
                   border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                 ),
               ),
@@ -214,7 +214,10 @@ class _PatientRegistrationScreenState extends State<PatientRegistrationScreen> {
                 width: double.infinity,
                 child: FilledButton(
                   onPressed: _isSubmitting ? null : _submit,
-                  style: FilledButton.styleFrom(backgroundColor: const Color(0xFF075E54)),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: const Color(0xFF075E54),
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                  ),
                   child: Text(_isSubmitting ? 'Saving...' : 'Save Record'),
                 ),
               ),

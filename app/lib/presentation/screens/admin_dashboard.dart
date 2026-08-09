@@ -19,7 +19,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 7, vsync: this);
+    _tabController = TabController(length: 5, vsync: this);
   }
 
   @override
@@ -53,11 +53,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
           tabs: const [
             Tab(text: 'OVERVIEW'),
             Tab(text: 'PHC SETUP'),
+            Tab(text: 'USERS'),
             Tab(text: 'PHC ADMIN'),
-            Tab(text: 'ASHA ACTIVITY'),
-            Tab(text: 'DOCTOR ACTIVITY'),
-            Tab(text: 'ALL LOGS'),
-            Tab(text: 'DEVICE SYNC'),
+            Tab(text: 'ACTIVITY LOGS'),
           ],
         ),
         actions: [
@@ -81,11 +79,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen>
         children: [
           _OverviewTab(),
           const _PhcSetupTab(),
+          const _WorkerManagementTab(),
           const _PhcAdminSetupTab(),
-          _ActivityTab(userRole: 'asha', title: 'ASHA Worker Activity'),
-          _ActivityTab(userRole: 'doctor', title: 'Doctor Activity'),
           _AllActivityLogsTab(),
-          const _DeviceSyncTab(),
         ],
       ),
     );
@@ -491,9 +487,9 @@ class _PhcSetupTabState extends State<_PhcSetupTab> {
                   const SizedBox(height: 20),
                   TextField(controller: _nameController, decoration: const InputDecoration(labelText: 'PHC Name', prefixIcon: Icon(Icons.local_hospital_outlined))),
                   const SizedBox(height: 16),
-                  TextField(controller: _districtController, decoration: const InputDecoration(labelText: 'District', prefixIcon: Icon(Icons.map_outlined))),
-                  const SizedBox(height: 16),
                   TextField(controller: _talukaController, decoration: const InputDecoration(labelText: 'Taluka', prefixIcon: Icon(Icons.account_tree_outlined))),
+                  const SizedBox(height: 16),
+                  TextField(controller: _districtController, decoration: const InputDecoration(labelText: 'District', prefixIcon: Icon(Icons.map_outlined))),
                   const SizedBox(height: 16),
                   TextField(controller: _villageController, decoration: const InputDecoration(labelText: 'Village', prefixIcon: Icon(Icons.location_on_outlined))),
                   const SizedBox(height: 16),
@@ -574,25 +570,42 @@ class _PhcSetupTabState extends State<_PhcSetupTab> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: Text(
-                                    phc['name'] as String? ?? 'PHC',
-                                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
-                                  ),
-                                ),
-                                Text(
-                                  phc['code'] as String? ?? '',
-                                  style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700),
-                                ),
-                              ],
-                            ),
+                             Row(
+                               children: [
+                                 Expanded(
+                                   child: Text(
+                                     (phc['name'] as String? ?? 'PHC').trim(),
+                                     style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                                     overflow: TextOverflow.ellipsis,
+                                     maxLines: 1,
+                                   ),
+                                 ),
+                                 const SizedBox(width: 8),
+                                 Expanded(
+                                   child: Text(
+                                     phc['code'] as String? ?? '',
+                                     style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700),
+                                     overflow: TextOverflow.ellipsis,
+                                     maxLines: 1,
+                                     textAlign: TextAlign.end,
+                                   ),
+                                 ),
+                               ],
+                             ),
                             const SizedBox(height: 6),
-                            Text('${phc['district'] ?? ''} > ${phc['taluka'] ?? ''} > ${phc['village'] ?? ''}',
-                                style: TextStyle(color: Colors.grey[700], fontSize: 12)),
+                            Text(
+                              '${phc['district'] ?? ''} > ${phc['taluka'] ?? ''} > ${phc['village'] ?? ''}',
+                              style: TextStyle(color: Colors.grey[700], fontSize: 12),
+                              overflow: TextOverflow.ellipsis,
+                              maxLines: 1,
+                            ),
                             const SizedBox(height: 4),
-                            Text(phc['address'] as String? ?? '', style: TextStyle(color: Colors.grey[600], fontSize: 12)),
+                            Text(
+                              phc['address'] as String? ?? '',
+                              style: TextStyle(color: Colors.grey[600], fontSize: 12),
+                              overflow: TextOverflow.ellipsis,
+                              maxLines: 1,
+                            ),
                             const SizedBox(height: 10),
                             Align(
                               alignment: Alignment.centerRight,
@@ -628,6 +641,7 @@ class _PhcAdminSetupTab extends StatefulWidget {
 
 class _PhcAdminSetupTabState extends State<_PhcAdminSetupTab> {
   final _fullNameController = TextEditingController();
+  final _emailController = TextEditingController();
   final _phoneController = TextEditingController();
   final _passwordController = TextEditingController();
   String? _selectedPhcId;
@@ -646,6 +660,7 @@ class _PhcAdminSetupTabState extends State<_PhcAdminSetupTab> {
   @override
   void dispose() {
     _fullNameController.dispose();
+    _emailController.dispose();
     _phoneController.dispose();
     _passwordController.dispose();
     super.dispose();
@@ -672,12 +687,18 @@ class _PhcAdminSetupTabState extends State<_PhcAdminSetupTab> {
 
   Future<void> _createAdmin() async {
     final fullName = _fullNameController.text.trim();
+    final email = _emailController.text.trim();
     final phone = _phoneController.text.trim();
     final password = _passwordController.text.trim();
     final phcId = _selectedPhcId;
 
-    if (fullName.isEmpty || phone.isEmpty || password.isEmpty || phcId == null) {
+    if (fullName.isEmpty || email.isEmpty || phone.isEmpty || password.isEmpty || phcId == null) {
       setState(() => _error = 'Select a PHC and fill all admin details');
+      return;
+    }
+
+    if (!email.contains('@')) {
+      setState(() => _error = 'Enter a valid admin email address');
       return;
     }
 
@@ -708,6 +729,7 @@ class _PhcAdminSetupTabState extends State<_PhcAdminSetupTab> {
       }
 
       final admin = await BackendApiService.registerPhcAdmin(
+        email: email,
         phone: phone,
         password: password,
         fullName: fullName,
@@ -771,7 +793,7 @@ class _PhcAdminSetupTabState extends State<_PhcAdminSetupTab> {
                     const Center(child: CircularProgressIndicator())
                   else ...[
                     DropdownButtonFormField<String>(
-                      value: _selectedPhcId,
+                      initialValue: _selectedPhcId,
                       isExpanded: true,
                       items: _phcs
                           .map(
@@ -796,6 +818,16 @@ class _PhcAdminSetupTabState extends State<_PhcAdminSetupTab> {
                       decoration: const InputDecoration(
                         labelText: 'Admin Full Name',
                         prefixIcon: Icon(Icons.badge_outlined),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    TextField(
+                      controller: _emailController,
+                      keyboardType: TextInputType.emailAddress,
+                      decoration: const InputDecoration(
+                        labelText: 'Admin Login Email',
+                        hintText: 'admin@yourorganization.org',
+                        prefixIcon: Icon(Icons.email_outlined),
                       ),
                     ),
                     const SizedBox(height: 16),
@@ -849,6 +881,10 @@ class _PhcAdminSetupTabState extends State<_PhcAdminSetupTab> {
                       style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                     ),
                     const SizedBox(height: 8),
+                    SelectableText(
+                      'Login email: ${_createdAdmin!['email'] ?? '${_phoneController.text.trim()}@gmail.com'}',
+                      style: const TextStyle(fontWeight: FontWeight.w600),
+                    ),
                     Text('User ID: ${_createdAdmin!['user_id'] ?? ''}'),
                     Text('PHC ID: ${_createdAdmin!['phc_id'] ?? ''}'),
                     Text('Already existed: ${_createdAdmin!['existed'] == true ? 'Yes' : 'No'}'),
@@ -858,6 +894,227 @@ class _PhcAdminSetupTabState extends State<_PhcAdminSetupTab> {
             ),
           ],
         ],
+      ),
+    );
+  }
+}
+
+class _WorkerManagementTab extends StatefulWidget {
+  const _WorkerManagementTab();
+
+  @override
+  State<_WorkerManagementTab> createState() => _WorkerManagementTabState();
+}
+
+class _WorkerManagementTabState extends State<_WorkerManagementTab> {
+  final _nameController = TextEditingController();
+  final _emailController = TextEditingController();
+  String _role = 'asha';
+  String? _phcId;
+  String? _doctorId;
+  bool _loading = false;
+  bool _saving = false;
+  String? _error;
+  Map<String, dynamic>? _created;
+  List<Map<String, dynamic>> _phcs = [];
+  List<Map<String, dynamic>> _doctors = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadPhcs();
+  }
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _emailController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadPhcs() async {
+    setState(() => _loading = true);
+    try {
+      final phcs = await BackendApiService.listPhcs();
+      if (!mounted) return;
+      setState(() {
+        _phcs = phcs;
+        _phcId ??= phcs.isNotEmpty ? phcs.first['id'] as String? : null;
+        _loading = false;
+      });
+      await _loadDoctors();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = e.toString().replaceAll('Exception: ', '');
+        _loading = false;
+      });
+    }
+  }
+
+  Future<void> _loadDoctors() async {
+    final phcId = _phcId;
+    if (phcId == null) return;
+    try {
+      final doctors = await BackendApiService.listDoctorsByPhc(phcId: phcId);
+      if (!mounted) return;
+      setState(() {
+        _doctors = doctors;
+        _doctorId = null;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _doctors = []);
+    }
+  }
+
+  Future<void> _createWorker() async {
+    final name = _nameController.text.trim();
+    final email = _emailController.text.trim();
+    if (name.isEmpty || email.isEmpty || _phcId == null) {
+      setState(() => _error = 'Select a PHC and enter the full name and email');
+      return;
+    }
+    if (!email.contains('@')) {
+      setState(() => _error = 'Enter a valid email address');
+      return;
+    }
+
+    setState(() {
+      _saving = true;
+      _error = null;
+      _created = null;
+    });
+
+    try {
+      final session = Supabase.instance.client.auth.currentSession;
+      if (session == null) throw Exception('Admin session expired. Please re-login.');
+      final result = await BackendApiService.createWorkerAccount(
+        email: email,
+        fullName: name,
+        role: _role,
+        phcId: _phcId,
+        doctorId: _role == 'asha' ? _doctorId : null,
+        adminToken: session.accessToken,
+      );
+      if (!mounted) return;
+      setState(() {
+        _created = result;
+        _saving = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = e.toString().replaceAll('Exception: ', '');
+        _saving = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(20),
+      child: Card(
+        elevation: 4,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Row(
+                children: [
+                  Icon(Icons.manage_accounts_outlined, color: Color(0xFF6A1B9A)),
+                  SizedBox(width: 12),
+                  Text('Worker Management', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                ],
+              ),
+              const SizedBox(height: 6),
+              Text(
+                'Create or reset ASHA and Doctor accounts. The generated temporary password is shown only once.',
+                style: TextStyle(color: Colors.grey[600], fontSize: 12),
+              ),
+              const SizedBox(height: 20),
+              if (_loading)
+                const Center(child: CircularProgressIndicator())
+              else ...[
+                DropdownButtonFormField<String>(
+                  initialValue: _role,
+                  items: const [
+                    DropdownMenuItem(value: 'asha', child: Text('ASHA Worker')),
+                    DropdownMenuItem(value: 'doctor', child: Text('Doctor')),
+                  ],
+                  onChanged: (value) => setState(() => _role = value ?? 'asha'),
+                  decoration: const InputDecoration(labelText: 'Account Role', prefixIcon: Icon(Icons.badge_outlined)),
+                ),
+                const SizedBox(height: 16),
+                DropdownButtonFormField<String>(
+                  initialValue: _phcId,
+                  isExpanded: true,
+                  items: _phcs.map((phc) => DropdownMenuItem<String>(
+                    value: phc['id'] as String?,
+                    child: Text('${phc['name'] ?? 'PHC'} (${phc['code'] ?? ''})', overflow: TextOverflow.ellipsis),
+                  )).toList(),
+                  onChanged: (value) {
+                    setState(() => _phcId = value);
+                    _loadDoctors();
+                  },
+                  decoration: const InputDecoration(labelText: 'PHC', prefixIcon: Icon(Icons.local_hospital_outlined)),
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: _nameController,
+                  decoration: const InputDecoration(labelText: 'Full Name', prefixIcon: Icon(Icons.person_outline)),
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: _emailController,
+                  keyboardType: TextInputType.emailAddress,
+                  decoration: const InputDecoration(labelText: 'Email Address', prefixIcon: Icon(Icons.email_outlined)),
+                ),
+                if (_role == 'asha' && _doctors.isNotEmpty) ...[
+                  const SizedBox(height: 16),
+                  DropdownButtonFormField<String>(
+                    initialValue: _doctorId,
+                    isExpanded: true,
+                    items: _doctors.map((doctor) => DropdownMenuItem<String>(
+                      value: doctor['id'] as String?,
+                      child: Text(doctor['full_name'] as String? ?? 'Doctor', overflow: TextOverflow.ellipsis),
+                    )).toList(),
+                    onChanged: (value) => setState(() => _doctorId = value),
+                    decoration: const InputDecoration(labelText: 'Supervising Doctor (optional)', prefixIcon: Icon(Icons.medical_services_outlined)),
+                  ),
+                ],
+                const SizedBox(height: 16),
+                if (_error != null) ...[
+                  Text(_error!, style: const TextStyle(color: Colors.red)),
+                  const SizedBox(height: 12),
+                ],
+                _saving
+                    ? const Center(child: CircularProgressIndicator())
+                    : FilledButton.icon(
+                        onPressed: _createWorker,
+                        icon: const Icon(Icons.person_add_alt_1_outlined),
+                        label: const Text('Create / Reset Account'),
+                      ),
+              ],
+              if (_created != null) ...[
+                const SizedBox(height: 20),
+                Container(
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: Colors.green.withValues(alpha: 0.08),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(
+                    'Account ready\nEmail: ${_emailController.text.trim().isEmpty ? 'Use the email entered' : _emailController.text.trim()}\nTemporary password: ${_created!['temp_password'] ?? 'Not returned'}\nThe user must change this password after first login.',
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -1171,223 +1428,3 @@ class _RiskStatCard extends StatelessWidget {
 // ─────────────────────────────────────────────────────────────
 // Device Sync Tab — Generate one-time Sync PINs for ASHA workers
 // ─────────────────────────────────────────────────────────────
-class _DeviceSyncTab extends StatefulWidget {
-  const _DeviceSyncTab();
-
-  @override
-  State<_DeviceSyncTab> createState() => _DeviceSyncTabState();
-}
-
-class _DeviceSyncTabState extends State<_DeviceSyncTab> {
-  final _phoneController = TextEditingController();
-  bool _isGenerating = false;
-  String? _generatedPin;
-  String? _error;
-  DateTime? _expiresAt;
-
-  @override
-  void dispose() {
-    _phoneController.dispose();
-    super.dispose();
-  }
-
-  Future<void> _generateSyncCode() async {
-    final phone = _phoneController.text.trim();
-    if (phone.isEmpty || phone.length < 10) {
-      setState(() => _error = 'Enter valid 10-digit phone number');
-      return;
-    }
-
-    setState(() {
-      _isGenerating = true;
-      _error = null;
-      _generatedPin = null;
-      _expiresAt = null;
-    });
-
-    try {
-      final session = Supabase.instance.client.auth.currentSession;
-      if (session == null) {
-        setState(() {
-          _error = 'Admin session expired. Please re-login.';
-          _isGenerating = false;
-        });
-        return;
-      }
-
-      final pin = await BackendApiService.generateSyncToken(
-        phone: phone,
-        adminToken: session.accessToken,
-      );
-
-      setState(() {
-        _generatedPin = pin;
-        _expiresAt = DateTime.now().add(const Duration(minutes: 10));
-        _isGenerating = false;
-      });
-    } catch (e) {
-      setState(() {
-        _error = e.toString().replaceAll('Exception: ', '');
-        _isGenerating = false;
-      });
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(20),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          // Header card
-          Card(
-            elevation: 4,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-            child: Padding(
-              padding: const EdgeInsets.all(20),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(10),
-                        decoration: BoxDecoration(
-                          color: Colors.amber.withValues(alpha: 0.15),
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: const Icon(Icons.sync_rounded, color: Colors.amber, size: 28),
-                      ),
-                      const SizedBox(width: 16),
-                      const Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'Device Sync Manager',
-                              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                            ),
-                            SizedBox(height: 4),
-                            Text(
-                              'Generate temporary codes for ASHA workers to transfer their account to a new phone.',
-                              style: TextStyle(fontSize: 12, color: Colors.grey),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 24),
-                  TextField(
-                    controller: _phoneController,
-                    keyboardType: TextInputType.phone,
-                    maxLength: 10,
-                    decoration: InputDecoration(
-                      labelText: 'ASHA Worker Phone Number',
-                      hintText: 'Enter 10-digit mobile number',
-                      counterText: '',
-                      prefixIcon: const Icon(Icons.phone_outlined, color: Color(0xFF6A1B9A)),
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                      focusedBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: const BorderSide(color: Color(0xFF6A1B9A), width: 2),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  if (_error != null) ...[
-                    Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: Colors.red.withValues(alpha: 0.1),
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: Colors.red.withValues(alpha: 0.3)),
-                      ),
-                      child: Row(
-                        children: [
-                          Icon(Icons.error_outline, color: Colors.red[400], size: 20),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: Text(_error!, style: TextStyle(color: Colors.red[700], fontSize: 13)),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                  ],
-                  _isGenerating
-                      ? const Center(child: CircularProgressIndicator(color: Color(0xFF6A1B9A)))
-                      : FilledButton.icon(
-                          onPressed: _generateSyncCode,
-                          icon: const Icon(Icons.vpn_key_rounded),
-                          label: const Text('Generate Sync Code'),
-                          style: FilledButton.styleFrom(
-                            backgroundColor: const Color(0xFF6A1B9A),
-                            foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(vertical: 16),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                          ),
-                        ),
-                ],
-              ),
-            ),
-          ),
-          // Generated PIN display
-          if (_generatedPin != null) ...[
-            const SizedBox(height: 24),
-            Card(
-              elevation: 6,
-              color: const Color(0xFF1A1A2E),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-              child: Padding(
-                padding: const EdgeInsets.all(24),
-                child: Column(
-                  children: [
-                    const Icon(Icons.check_circle_rounded, color: Colors.greenAccent, size: 48),
-                    const SizedBox(height: 12),
-                    const Text(
-                      'Sync Code Generated',
-                      style: TextStyle(color: Colors.white70, fontSize: 14),
-                    ),
-                    const SizedBox(height: 20),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
-                      decoration: BoxDecoration(
-                        color: Colors.white.withValues(alpha: 0.08),
-                        borderRadius: BorderRadius.circular(16),
-                        border: Border.all(color: Colors.amber.withValues(alpha: 0.4)),
-                      ),
-                      child: Text(
-                        _generatedPin!,
-                        style: const TextStyle(
-                          color: Colors.amber,
-                          fontSize: 42,
-                          fontWeight: FontWeight.bold,
-                          letterSpacing: 12,
-                          fontFamily: 'monospace',
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    if (_expiresAt != null)
-                      Text(
-                        'Expires at ${_expiresAt!.hour.toString().padLeft(2, '0')}:${_expiresAt!.minute.toString().padLeft(2, '0')} (10 minutes)',
-                        style: const TextStyle(color: Colors.white54, fontSize: 12),
-                      ),
-                    const SizedBox(height: 8),
-                    const Text(
-                      'Tell this code to the ASHA worker verbally.\nThey will enter it on their new phone.',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(color: Colors.white38, fontSize: 11),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-}

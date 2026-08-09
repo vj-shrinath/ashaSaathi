@@ -1,7 +1,6 @@
 import 'dart:convert';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:http/http.dart' as http;
-import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/message_model.dart';
 
 /// Calls the Node.js backend API for voice transcription + triage analysis.
@@ -44,64 +43,6 @@ class BackendApiService {
     } catch (e) {
       throw Exception('Voice analysis failed: $e');
     }
-  }
-
-  /// Registers user account via Node backend using Service Role key
-  /// to bypass standard OTP or SMTP mail rate-limitations.
-  static Future<void> registerWorker({
-    required String phone,
-    required String password,
-    required String fullName,
-    required String role,
-    String? phcId,
-    String? doctorId,
-  }) async {
-    final response = await http.post(
-      Uri.parse('$_baseUrl/api/v1/auth/register-worker'),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'phone': phone,
-        'password': password,
-        'fullName': fullName,
-        'role': role,
-        'phc_id': phcId,
-        'doctor_id': doctorId,
-      }),
-    );
-
-    final data = jsonDecode(response.body);
-
-    if (response.statusCode != 200) {
-      final message = data['message'] ?? 'Registration failed';
-      if (response.statusCode == 422 || message.toLowerCase().contains('already')) {
-        throw AuthException(
-          message,
-          statusCode: response.statusCode.toString(),
-        );
-      }
-      throw AuthException(
-        message,
-        statusCode: response.statusCode.toString(),
-      );
-    }
-  }
-
-  /// Resolves an existing worker account by phone number.
-  static Future<Map<String, dynamic>> resolveWorker({
-    required String phone,
-  }) async {
-    final response = await http.post(
-      Uri.parse('$_baseUrl/api/v1/auth/resolve-worker'),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({'phone': phone}),
-    );
-
-    final data = jsonDecode(response.body);
-    if (response.statusCode == 200 && data['status'] == 'success') {
-      return Map<String, dynamic>.from(data['data']);
-    }
-
-    throw Exception(data['message'] ?? 'Failed to resolve worker profile');
   }
 
   static Future<List<Map<String, dynamic>>> listPhcs() async {
@@ -190,6 +131,7 @@ class BackendApiService {
   }
 
   static Future<Map<String, dynamic>> registerPhcAdmin({
+    required String email,
     required String phone,
     required String password,
     required String fullName,
@@ -203,6 +145,7 @@ class BackendApiService {
         'Authorization': 'Bearer $adminToken',
       },
       body: jsonEncode({
+        'email': email,
         'phone': phone,
         'password': password,
         'fullName': fullName,
@@ -243,44 +186,132 @@ class BackendApiService {
     throw Exception(data['message'] ?? 'Failed to create public PHC');
   }
 
-  /// Generates a temporary Sync PIN on the backend for device transfer (Admin auth required)
+  /// Device transfer has been removed.
   static Future<String> generateSyncToken({
     required String phone,
     required String adminToken,
   }) async {
-    final response = await http.post(
-      Uri.parse('$_baseUrl/api/v1/auth/admin/generate-sync-token'),
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer $adminToken',
-      },
-      body: jsonEncode({'phone': phone}),
-    );
-
-    final data = jsonDecode(response.body);
-    if (response.statusCode == 200 && data['status'] == 'success') {
-      return data['data']['pin'] as String;
-    } else {
-      throw Exception(data['message'] ?? 'Failed to generate sync code');
-    }
+    throw UnimplementedError('Device sync has been removed');
   }
 
-  /// Verifies a 6-digit Sync PIN on backend to retrieve temporary credentials
+  /// Device transfer has been removed.
   static Future<Map<String, dynamic>> verifySyncToken({
     required String phone,
     required String pin,
   }) async {
+    throw UnimplementedError('Device sync has been removed');
+  }
+
+  /// Admin-managed worker provisioning uses the backend service directly.
+  static Future<Map<String, dynamic>> createWorkerAccount({
+    required String email,
+    required String fullName,
+    required String role,
+    String? phcId,
+    String? doctorId,
+    required String adminToken,
+  }) async {
     final response = await http.post(
-      Uri.parse('$_baseUrl/api/v1/auth/verify-sync-token'),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({'phone': phone, 'pin': pin}),
+      Uri.parse('$_baseUrl/api/v1/auth/register-worker'),
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer $adminToken',
+      },
+      body: jsonEncode({
+        'email': email,
+        'fullName': fullName,
+        'role': role,
+        'phc_id': phcId,
+        'doctor_id': doctorId,
+      }),
     );
 
     final data = jsonDecode(response.body);
     if (response.statusCode == 200 && data['status'] == 'success') {
       return Map<String, dynamic>.from(data['data']);
-    } else {
-      throw Exception(data['message'] ?? 'Sync verification failed');
+    }
+    throw Exception(data['message'] ?? 'Failed to create worker account');
+  }
+
+  static Future<Map<String, dynamic>> completePasswordChange({
+    required String newPassword,
+    required String accessToken,
+  }) async {
+    final response = await http.post(
+      Uri.parse('$_baseUrl/api/v1/auth/complete-password-change'),
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer $accessToken',
+      },
+      body: jsonEncode({
+        'newPassword': newPassword,
+      }),
+    );
+
+    final data = jsonDecode(response.body);
+    if (response.statusCode == 200 && data['status'] == 'success') {
+      return Map<String, dynamic>.from(data['data']);
+    }
+    throw Exception(data['message'] ?? 'Failed to update password');
+  }
+
+  // ─── GramNidan AI Register Fill ──────────────────────────────────────────────
+
+  /// Sends a voice audio URL + register type to the backend.
+  /// Backend runs Sarvam STT → Claude GramNidan fill → returns structured JSON.
+  /// Returns: { moduleId: { fieldId: "value" } }
+  static Future<Map<String, Map<String, String>>> fillGramNidanRegisters({
+    required String audioUrl,
+    required String registerType, // 'anc', 'hbnc', 'village', etc.
+    required String ashaId,
+    String? visitId,
+    String? patientId,
+    String patientName = 'Unknown',
+    String ashaName = 'ASHA Worker',
+  }) async {
+    try {
+      final response = await http.post(
+        Uri.parse('$_baseUrl/api/v1/visit/gramnidan'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'audioUrl': audioUrl,
+          'registerType': registerType,
+          'ashaId': ashaId,
+          'visitId': visitId,
+          'patientId': patientId,
+          'patientName': patientName,
+          'ashaName': ashaName,
+        }),
+      ).timeout(const Duration(minutes: 3));
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body) as Map<String, dynamic>;
+        final rawModules = data['filledModules'] as Map<String, dynamic>? ?? {};
+        return rawModules.map((moduleId, fields) {
+          final fieldMap = (fields as Map<String, dynamic>? ?? {}).map(
+            (k, v) => MapEntry(k, v?.toString() ?? ''),
+          );
+          return MapEntry(moduleId, fieldMap);
+        });
+      } else {
+        throw Exception('GramNidan backend error: ${response.statusCode} ${response.body}');
+      }
+    } catch (e) {
+      throw Exception('GramNidan fill failed: $e');
+    }
+  }
+
+  /// Notifies backend that a register has been submitted to THO inbox.
+  static Future<void> submitRegisterToTho(String registerId, {String? pdfUrl}) async {
+    try {
+      await http.post(
+        Uri.parse('$_baseUrl/api/v1/visit/gramnidan/submit-tho'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'registerId': registerId, 'pdfUrl': pdfUrl}),
+      ).timeout(const Duration(seconds: 15));
+    } catch (e) {
+      // Silently fail — Supabase update in FirebaseService is the source of truth
     }
   }
 }
+

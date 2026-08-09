@@ -1,96 +1,97 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import '../../core/models/user_role.dart';
+import '../../core/services/backend_api_service.dart';
 
-class LoginScreen extends StatefulWidget {
-  const LoginScreen({super.key});
+class PasswordChangeScreen extends StatefulWidget {
+  const PasswordChangeScreen({super.key});
 
   @override
-  State<LoginScreen> createState() => _LoginScreenState();
+  State<PasswordChangeScreen> createState() => _PasswordChangeScreenState();
 }
 
-class _LoginScreenState extends State<LoginScreen> {
-  final _emailController = TextEditingController();
+class _PasswordChangeScreenState extends State<PasswordChangeScreen> {
   final _passwordController = TextEditingController();
-  bool _isLoading = false;
+  final _confirmController = TextEditingController();
+  bool _isSaving = false;
   String? _error;
-
-  UserRole? get _selectedRole {
-    final value = GoRouterState.of(context).uri.queryParameters['role'];
-    if (value == null) return null;
-    return UserRole.fromString(value);
-  }
 
   SupabaseClient get _supabase => Supabase.instance.client;
 
-  Future<void> _login() async {
-    final email = _emailController.text.trim();
+  Future<void> _savePassword() async {
     final password = _passwordController.text.trim();
+    final confirm = _confirmController.text.trim();
 
-    if (email.isEmpty || password.isEmpty) {
-      setState(() => _error = 'Enter email and password');
+    if (password.length != 6 || int.tryParse(password) == null) {
+      setState(() => _error = 'PIN must be exactly 6 digits / PIN 6 ank ka hona chahiye');
+      return;
+    }
+    if (password != confirm) {
+      setState(() => _error = 'PINs do not match / PIN match nahi ho raha');
       return;
     }
 
     setState(() {
-      _isLoading = true;
+      _isSaving = true;
       _error = null;
     });
 
     try {
-      final response = await _supabase.auth.signInWithPassword(
-        email: email,
-        password: password,
+      final user = _supabase.auth.currentUser;
+      final session = _supabase.auth.currentSession;
+      if (user == null) {
+        context.go('/auth/login');
+        return;
+      }
+      if (session == null) {
+        context.go('/auth/login');
+        return;
+      }
+
+      await BackendApiService.completePasswordChange(
+        newPassword: password,
+        accessToken: session.accessToken,
       );
 
-      if (response.user == null) {
-        setState(() => _error = 'Invalid credentials');
-        return;
-      }
+      if (!mounted) return;
 
-      final profile = await _supabase
-          .from('user_profiles')
-          .select('role, is_active, must_change_password')
-          .eq('id', response.user!.id)
-          .maybeSingle();
-
-      final isActive = profile?['is_active'] as bool? ?? true;
-      if (!isActive) {
-        await _supabase.auth.signOut();
-        setState(() => _error = 'This account is inactive');
-        return;
-      }
-
-      final selectedRole = _selectedRole;
-      final actualRole = UserRole.fromString(profile?['role'] as String? ?? 'asha');
-      if (selectedRole != null && selectedRole != actualRole) {
-        await _supabase.auth.signOut();
-        setState(() => _error = 'This account is not registered as a ${selectedRole.displayName}.');
-        return;
-      }
+      await showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (dialogContext) => AlertDialog(
+          icon: const Icon(Icons.check_circle_rounded, color: Colors.green, size: 48),
+          title: const Text('PIN Set / PIN Tayaar'),
+          content: const Text(
+            'Your 6-digit PIN was set successfully. Please sign in again with your new PIN.\nAapka 6 ank ka PIN set ho gaya. Naya PIN se login karein.',
+            textAlign: TextAlign.center,
+          ),
+          actions: [
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('Continue'),
+            ),
+          ],
+        ),
+      );
 
       if (!mounted) return;
-      if (profile?['must_change_password'] == true) {
-        context.go('/auth/change-password');
-      } else {
-        context.go(actualRole.route);
-      }
+      await _supabase.auth.signOut();
+      if (mounted) context.go('/auth/login');
     } on AuthException catch (e) {
       setState(() => _error = e.message);
     } catch (e) {
-      setState(() => _error = 'Login failed: $e');
+      setState(() => _error = 'Password update failed: $e');
     } finally {
       if (mounted) {
-        setState(() => _isLoading = false);
+        setState(() => _isSaving = false);
       }
     }
   }
 
   @override
   void dispose() {
-    _emailController.dispose();
     _passwordController.dispose();
+    _confirmController.dispose();
     super.dispose();
   }
 
@@ -100,9 +101,9 @@ class _LoginScreenState extends State<LoginScreen> {
       body: Container(
         decoration: const BoxDecoration(
           gradient: LinearGradient(
+            colors: [Color(0xFF10261C), Color(0xFF1B5E20), Color(0xFF2E7D32)],
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
-            colors: [Color(0xFF0F2E20), Color(0xFF1B5E20), Color(0xFF2E7D32)],
           ),
         ),
         child: SafeArea(
@@ -119,39 +120,49 @@ class _LoginScreenState extends State<LoginScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        const Icon(Icons.favorite_rounded, size: 56, color: Color(0xFF1B5E20)),
+                        const Icon(Icons.pin_rounded, size: 56, color: Color(0xFF1B5E20)),
                         const SizedBox(height: 16),
                         Text(
-                          'ASHA Saathi AI',
+                          'Set Your 6-Digit PIN',
                           textAlign: TextAlign.center,
                           style: Theme.of(context).textTheme.headlineSmall?.copyWith(
                                 fontWeight: FontWeight.bold,
                               ),
                         ),
+                        const SizedBox(height: 4),
+                        const Text(
+                          '6 ank ka PIN set karein',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(color: Color(0xFF1B5E20), fontWeight: FontWeight.w600),
+                        ),
                         const SizedBox(height: 8),
                         Text(
-                          _selectedRole == null
-                              ? 'Sign in with your admin-issued email and password.'
-                              : 'Sign in as ${_selectedRole!.displayName} with your admin-issued credentials.',
+                          'Your account requires a new 6-digit PIN before you can continue.',
                           textAlign: TextAlign.center,
                           style: TextStyle(color: Colors.grey[600]),
                         ),
                         const SizedBox(height: 28),
                         TextField(
-                          controller: _emailController,
-                          keyboardType: TextInputType.emailAddress,
+                          controller: _passwordController,
+                          obscureText: true,
+                          keyboardType: TextInputType.number,
+                          maxLength: 6,
                           decoration: const InputDecoration(
-                            labelText: 'Email',
-                            prefixIcon: Icon(Icons.email_outlined),
+                            labelText: 'New 6-digit PIN / Naya 6 ank ka PIN',
+                            prefixIcon: Icon(Icons.pin_outlined),
+                            counterText: '',
                           ),
                         ),
                         const SizedBox(height: 16),
                         TextField(
-                          controller: _passwordController,
+                          controller: _confirmController,
                           obscureText: true,
+                          keyboardType: TextInputType.number,
+                          maxLength: 6,
                           decoration: const InputDecoration(
-                            labelText: 'Password',
-                            prefixIcon: Icon(Icons.lock_outline),
+                            labelText: 'Confirm PIN / PIN dubara dalein',
+                            prefixIcon: Icon(Icons.pin_outlined),
+                            counterText: '',
                           ),
                         ),
                         const SizedBox(height: 20),
@@ -167,14 +178,14 @@ class _LoginScreenState extends State<LoginScreen> {
                           ),
                           const SizedBox(height: 16),
                         ],
-                        _isLoading
+                        _isSaving
                             ? const Center(child: CircularProgressIndicator())
                             : FilledButton(
-                                onPressed: _login,
+                                onPressed: _savePassword,
                                 style: FilledButton.styleFrom(
                                   padding: const EdgeInsets.symmetric(vertical: 16),
                                 ),
-                                child: const Text('Sign In'),
+                                child: const Text('Save PIN / PIN Save Karein'),
                               ),
                       ],
                     ),

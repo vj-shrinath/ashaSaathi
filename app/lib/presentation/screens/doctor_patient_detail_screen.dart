@@ -96,6 +96,11 @@ class _DoctorPatientDetailScreenState extends State<DoctorPatientDetailScreen> {
               context.push('/chat/${widget.patientId}/$visitId');
             },
           ),
+          IconButton(
+            icon: const Icon(Icons.assignment_rounded),
+            tooltip: 'Open doctor sheet',
+            onPressed: () => context.push('/doctor-sheet/${widget.patientId}'),
+          ),
         ],
       ),
       body: SingleChildScrollView(
@@ -138,6 +143,15 @@ class _DoctorPatientDetailScreenState extends State<DoctorPatientDetailScreen> {
                       }
                       return _SummaryBubble(report: latest);
                     },
+                  ),
+                  const SizedBox(height: 16),
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton.icon(
+                      onPressed: () => context.push('/doctor-sheet/${widget.patientId}'),
+                      icon: const Icon(Icons.assignment_rounded),
+                      label: const Text('Open Auto-filled Doctor Sheet'),
+                    ),
                   ),
                   const SizedBox(height: 16),
                   Row(

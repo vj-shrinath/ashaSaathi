@@ -58,6 +58,10 @@ dependencies:
   cached_network_image: ^3.4.1
   flutter_animate: ^4.5.2
 
+  # Doctor sheet PDF generation and sharing to ANM
+  pdf: ^3.13.0
+  printing: ^5.15.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

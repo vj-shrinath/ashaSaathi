@@ -19,53 +19,89 @@ class _DoctorDashboardScreenState extends State<DoctorDashboardScreen>
   bool _loadingScope = true;
   Set<String> _scopedAshaIds = {};
   String? _doctorId;
+  String? _doctorName;
+  String? _phcName;
+  final TextEditingController _searchController = TextEditingController();
+  String _searchQuery = '';
 
   @override
   void initState() {
     super.initState();
     _loadDoctorScope();
+    _searchController.addListener(() {
+      setState(() {
+        _searchQuery = _searchController.text.trim().toLowerCase();
+      });
+    });
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
   }
 
   Future<void> _loadDoctorScope() async {
     try {
       final user = Supabase.instance.client.auth.currentUser;
       if (user == null) {
-        setState(() => _loadingScope = false);
+        debugPrint("[DoctorScope] ERROR: No authenticated user!");
+        if (mounted) setState(() => _loadingScope = false);
         return;
       }
       _doctorId = user.id;
 
-      // 1. Fetch current doctor profile to find phc_id
+      // 1. Fetch current doctor profile to find phc_id and name
       final docProfile = await Supabase.instance.client
           .from('user_profiles')
-          .select('phc_id')
+          .select('phc_id, full_name')
           .eq('id', user.id)
           .maybeSingle();
 
-      if (docProfile != null && docProfile['phc_id'] != null) {
-        final phcId = docProfile['phc_id'] as String;
+      final phcId = docProfile != null ? docProfile['phc_id'] as String? : null;
+      _doctorName = docProfile != null ? docProfile['full_name'] as String? : null;
 
-        // 2. Fetch ASHA IDs in the doctor's PHC who are assigned to this doctor
+      String? phcName;
+      if (phcId != null) {
+        final phcProfile = await Supabase.instance.client
+            .from('phcs')
+            .select('name')
+            .eq('id', phcId)
+            .maybeSingle();
+        phcName = phcProfile != null ? phcProfile['name'] as String? : null;
+        _phcName = phcName;
+      }
+
+      final Set<String> ashaSet = {};
+
+      if (phcId != null) {
+        // Fetch ASHA IDs in the doctor's PHC
         final ashaRows = await Supabase.instance.client
             .from('user_profiles')
             .select('id')
             .eq('role', 'asha')
-            .eq('phc_id', phcId)
-            .eq('doctor_id', user.id);
-
-        if (mounted) {
-          setState(() {
-            _scopedAshaIds = (ashaRows as List).map((r) => r['id'] as String).toSet();
-            _loadingScope = false;
-          });
-        }
-      } else {
-        if (mounted) {
-          setState(() => _loadingScope = false);
-        }
+            .eq('phc_id', phcId);
+        ashaSet.addAll((ashaRows as List).map((r) => r['id'] as String));
       }
-    } catch (e) {
-      debugPrint("Error loading doctor scope: $e");
+
+      // Also explicitly fetch ASHAs assigned directly to this doctor
+      final directAshaRows = await Supabase.instance.client
+          .from('user_profiles')
+          .select('id')
+          .eq('role', 'asha')
+          .eq('doctor_id', user.id);
+      
+      ashaSet.addAll((directAshaRows as List).map((r) => r['id'] as String));
+
+      if (mounted) {
+        setState(() {
+          _scopedAshaIds = ashaSet;
+          _loadingScope = false;
+        });
+      }
+    } catch (e, stack) {
+      debugPrint("[DoctorScope] EXCEPTION: $e");
+      debugPrint("[DoctorScope] Stack: $stack");
       if (mounted) {
         setState(() => _loadingScope = false);
       }
@@ -75,10 +111,41 @@ class _DoctorDashboardScreenState extends State<DoctorDashboardScreen>
   @override
   Widget build(BuildContext context) {
     if (_loadingScope) {
-      return const Scaffold(
-        backgroundColor: Color(0xFFE8F4FD),
+      return Scaffold(
+        backgroundColor: const Color(0xFFF1F5F9),
         body: Center(
-          child: CircularProgressIndicator(color: Color(0xFF0277BD)),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  shape: BoxShape.circle,
+                  boxShadow: [
+                    BoxShadow(
+                      color: const Color(0xFF0F4C81).withValues(alpha: 0.15),
+                      blurRadius: 20,
+                      spreadRadius: 5,
+                    ),
+                  ],
+                ),
+                child: const CircularProgressIndicator(
+                  color: Color(0xFF0F4C81),
+                  strokeWidth: 3,
+                ),
+              ),
+              const SizedBox(height: 16),
+              const Text(
+                'Loading Doctor Workspace...',
+                style: TextStyle(
+                  color: Color(0xFF334155),
+                  fontWeight: FontWeight.w600,
+                  fontSize: 15,
+                ),
+              ),
+            ],
+          ),
         ),
       );
     }
@@ -86,71 +153,142 @@ class _DoctorDashboardScreenState extends State<DoctorDashboardScreen>
     final theme = Theme.of(context);
 
     return Scaffold(
-      backgroundColor: const Color(0xFFE8F4FD),
-      appBar: AppBar(
-        backgroundColor: const Color(0xFF0277BD),
-        foregroundColor: Colors.white,
-        title: const Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('Doctor Triage Dashboard',
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-            Text('Fast patient overview & actions',
-                style: TextStyle(fontSize: 11, color: Colors.white70)),
-          ],
-        ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh_rounded, color: Colors.white),
-            onPressed: () {
-              _loadDoctorScope();
-              setState(() {});
-            },
-            tooltip: 'Refresh',
-          ),
-          IconButton(
-            icon: const Icon(Icons.logout_rounded, color: Colors.white),
-            onPressed: () async {
-              await Supabase.instance.client.auth.signOut();
-              if (context.mounted) context.go('/auth/login');
-            },
-            tooltip: 'Sign Out',
-          ),
-        ],
-      ),
-      body: RefreshIndicator(
-        onRefresh: () async {
-          await _loadDoctorScope();
-          setState(() {});
+      backgroundColor: const Color(0xFFF8FAFC),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () {
+          context.push('/dashboard/doctor/patients');
         },
-        child: ListView(
-          padding: const EdgeInsets.all(16),
-          children: [
-            _OverviewHeader(),
-            const SizedBox(height: 16),
-            _SummaryGrid(
-              selectedFilter: _selectedFilter,
-              onSelected: (filter) => setState(() => _selectedFilter = filter),
-              myAshaIds: _scopedAshaIds,
-            ),
-            const SizedBox(height: 16),
-            _SectionPills(
-              selectedFilter: _selectedFilter,
-              onSelected: (filter) => setState(() => _selectedFilter = filter),
-            ),
-            const SizedBox(height: 16),
-            Text(_selectedFilter.title,
-                style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold)),
-            const SizedBox(height: 10),
-            SizedBox(
-              height: 420,
-              child: _PatientFeedPanel(
-                filter: _selectedFilter,
-                myAshaIds: _scopedAshaIds,
-                doctorId: _doctorId,
+        icon: const Icon(Icons.add_task_rounded, size: 22),
+        label: const Text(
+          'Prescribe Medication',
+          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15, letterSpacing: 0.2),
+        ),
+        backgroundColor: const Color(0xFF0F4C81),
+        foregroundColor: Colors.white,
+        elevation: 6,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      ),
+      floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
+      body: SafeArea(
+        child: RefreshIndicator(
+          color: const Color(0xFF0F4C81),
+          onRefresh: () async {
+            await _loadDoctorScope();
+            setState(() {});
+          },
+          child: CustomScrollView(
+            physics: const AlwaysScrollableScrollPhysics(parent: BouncingScrollPhysics()),
+            slivers: [
+              // 1. Hero Doctor Header
+              SliverToBoxAdapter(
+                child: _DoctorHeroHeader(
+                  doctorName: _doctorName,
+                  phcName: _phcName,
+                  onRefresh: () {
+                    _loadDoctorScope();
+                    setState(() {});
+                  },
+                  onSignOut: () async {
+                    await Supabase.instance.client.auth.signOut();
+                    if (context.mounted) context.go('/auth/login');
+                  },
+                ),
               ),
-            ),
-          ],
+
+              // Main Dashboard Body Content
+              SliverPadding(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                sliver: SliverList(
+                  delegate: SliverChildListDelegate([
+                    // 2. Quick Search Bar
+                    _SearchBar(
+                      controller: _searchController,
+                      searchQuery: _searchQuery,
+                      onClear: () {
+                        _searchController.clear();
+                        setState(() => _searchQuery = '');
+                      },
+                    ),
+
+                    const SizedBox(height: 16),
+
+                    // 3. Triage Risk Summary Grid
+                    _SummaryGrid(
+                      selectedFilter: _selectedFilter,
+                      onSelected: (filter) => setState(() => _selectedFilter = filter),
+                      myAshaIds: _scopedAshaIds,
+                    ),
+
+                    const SizedBox(height: 18),
+
+                    // 4. Horizontal Section Pills / Filters
+                    _SectionPills(
+                      selectedFilter: _selectedFilter,
+                      onSelected: (filter) => setState(() => _selectedFilter = filter),
+                    ),
+
+                    const SizedBox(height: 18),
+
+                    // 5. Section Header Title with Badge
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Row(
+                          children: [
+                            Container(
+                              width: 4,
+                              height: 18,
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF0F4C81),
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              _selectedFilter.title,
+                              style: theme.textTheme.titleMedium?.copyWith(
+                                fontWeight: FontWeight.bold,
+                                color: const Color(0xFF0F172A),
+                                fontSize: 18,
+                              ),
+                            ),
+                          ],
+                        ),
+                        if (_searchQuery.isNotEmpty)
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF0F4C81).withValues(alpha: 0.1),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Text(
+                              'Filter: "$_searchQuery"',
+                              style: const TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                                color: Color(0xFF0F4C81),
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+
+                    const SizedBox(height: 12),
+
+                    // 6. Patient Feed Content List
+                    _PatientFeedPanel(
+                      filter: _selectedFilter,
+                      myAshaIds: _scopedAshaIds,
+                      doctorId: _doctorId,
+                      searchQuery: _searchQuery,
+                    ),
+
+                    const SizedBox(height: 80), // Padding for FAB
+                  ]),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -170,32 +308,401 @@ enum _DashboardFilter {
   final String title;
 }
 
-class _OverviewHeader extends StatelessWidget {
+// ─────────────────────────────────────────────────────────────────────────────
+// HERO HEADER
+// ─────────────────────────────────────────────────────────────────────────────
+class _DoctorHeroHeader extends StatelessWidget {
+  final String? doctorName;
+  final String? phcName;
+  final VoidCallback onRefresh;
+  final VoidCallback onSignOut;
+
+  const _DoctorHeroHeader({
+    this.doctorName,
+    this.phcName,
+    required onRefresh,
+    required onSignOut,
+  })  : onRefresh = onRefresh,
+        onSignOut = onSignOut;
+
   @override
   Widget build(BuildContext context) {
+    final displayName = (doctorName != null && doctorName!.isNotEmpty)
+        ? doctorName!
+        : 'Doctor Workspace';
+
+    final dateStr = _getFormattedDate();
+
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          colors: [Color(0xFF0277BD), Color(0xFF64B5F6)],
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            Color(0xFF0F172A), // Slate 900
+            Color(0xFF1E293B), // Slate 800
+            Color(0xFF0F4C81), // Deep Medical Blue
+          ],
         ),
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: BorderRadius.only(
+          bottomLeft: Radius.circular(24),
+          bottomRight: Radius.circular(24),
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Color(0x200F172A),
+            blurRadius: 16,
+            offset: Offset(0, 8),
+          ),
+        ],
       ),
-      child: const Column(
+      padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+      child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('Quick triage overview',
-              style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
-          SizedBox(height: 6),
-          Text('Scan patients, open a detail view, and act without leaving the dashboard.',
-              style: TextStyle(color: Colors.white70)),
+          // Top Row: Profile Avatar, Greetings & Action Buttons
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              // Avatar with online status
+              Stack(
+                children: [
+                  Container(
+                    width: 48,
+                    height: 48,
+                    decoration: BoxDecoration(
+                      gradient: const LinearGradient(
+                        colors: [Color(0xFF38BDF8), Color(0xFF0284C7)],
+                      ),
+                      shape: BoxShape.circle,
+                      border: Border.all(color: Colors.white.withValues(alpha: 0.4), width: 2),
+                      boxShadow: [
+                        BoxShadow(
+                          color: const Color(0xFF0284C7).withValues(alpha: 0.4),
+                          blurRadius: 10,
+                          offset: const Offset(0, 4),
+                        ),
+                      ],
+                    ),
+                    child: Center(
+                      child: Text(
+                        displayName.isNotEmpty ? displayName[0].toUpperCase() : 'D',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 22,
+                        ),
+                      ),
+                    ),
+                  ),
+                  Positioned(
+                    right: 2,
+                    bottom: 2,
+                    child: Container(
+                      width: 12,
+                      height: 12,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF10B981), // Emerald active green
+                        shape: BoxShape.circle,
+                        border: Border.all(color: Colors.white, width: 2),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(width: 12),
+
+              // Doctor Name with multi-line wrap support for long names
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Text(
+                      'Welcome back,',
+                      style: TextStyle(
+                        color: Color(0xFF38BDF8),
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      'Dr. ${doctorName ?? "Doctor"}',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 17,
+                        fontWeight: FontWeight.bold,
+                        height: 1.2,
+                        letterSpacing: 0.1,
+                      ),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ),
+              ),
+
+              const SizedBox(width: 8),
+
+              // Action Buttons (Refresh & Sign Out)
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _HeaderIconButton(
+                    icon: Icons.refresh_rounded,
+                    tooltip: 'Refresh Data',
+                    onPressed: onRefresh,
+                  ),
+                  const SizedBox(width: 6),
+                  _HeaderIconButton(
+                    icon: Icons.logout_rounded,
+                    tooltip: 'Sign Out',
+                    onPressed: onSignOut,
+                  ),
+                ],
+              ),
+            ],
+          ),
+
+          const SizedBox(height: 12),
+
+          // Sub-row: PHC Badge + Triage Live Status
+          Row(
+            children: [
+              if (phcName != null) ...[
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: Colors.white.withValues(alpha: 0.15)),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.local_hospital_rounded,
+                          size: 13, color: Color(0xFF38BDF8)),
+                      const SizedBox(width: 5),
+                      ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 180),
+                        child: Text(
+                          phcName!,
+                          style: const TextStyle(
+                            color: Colors.white70,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+              ],
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF10B981).withValues(alpha: 0.18),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: const Color(0xFF10B981).withValues(alpha: 0.4)),
+                ),
+                child: const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.circle, size: 6, color: Color(0xFF34D399)),
+                    SizedBox(width: 5),
+                    Text(
+                      'Triage Live',
+                      style: TextStyle(
+                        color: Color(0xFF34D399),
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+
+          const SizedBox(height: 14),
+
+          // Sub-header Banner Card inside Hero
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.08),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
+            ),
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF0EA5E9).withValues(alpha: 0.2),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: const Icon(Icons.medical_services_rounded,
+                      color: Color(0xFF38BDF8), size: 20),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Clinical Patient Triage',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 13,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        'Real-time ASHA reports • Quick review & prescriptions',
+                        style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.7),
+                          fontSize: 11,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(
+                    dateStr,
+                    style: const TextStyle(
+                      color: Colors.white70,
+                      fontSize: 10,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
         ],
+      ),
+    );
+  }
+
+  String _getFormattedDate() {
+    final now = DateTime.now();
+    final months = [
+      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+    ];
+    return '${now.day} ${months[now.month - 1]}';
+  }
+}
+
+class _HeaderIconButton extends StatelessWidget {
+  final IconData icon;
+  final String tooltip;
+  final VoidCallback onPressed;
+
+  const _HeaderIconButton({
+    required this.icon,
+    required this.tooltip,
+    required this.onPressed,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onPressed,
+        borderRadius: BorderRadius.circular(12),
+        child: Container(
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.12),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.15)),
+          ),
+          child: Icon(icon, color: Colors.white, size: 20),
+        ),
       ),
     );
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// SEARCH BAR WIDGET
+// ─────────────────────────────────────────────────────────────────────────────
+class _SearchBar extends StatelessWidget {
+  final TextEditingController controller;
+  final String searchQuery;
+  final VoidCallback onClear;
+
+  const _SearchBar({
+    required this.controller,
+    required this.searchQuery,
+    required this.onClear,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFF0F172A).withValues(alpha: 0.05),
+            blurRadius: 12,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: TextField(
+        controller: controller,
+        style: const TextStyle(fontSize: 14, color: Color(0xFF0F172A), fontWeight: FontWeight.w500),
+        decoration: InputDecoration(
+          hintText: 'Search patient by name, ASHA, or symptoms...',
+          hintStyle: const TextStyle(color: Color(0xFF94A3B8), fontSize: 13),
+          prefixIcon: const Icon(Icons.search_rounded, color: Color(0xFF0F4C81), size: 22),
+          suffixIcon: searchQuery.isNotEmpty
+              ? IconButton(
+                  icon: const Icon(Icons.cancel_rounded, color: Color(0xFF94A3B8), size: 18),
+                  onPressed: onClear,
+                )
+              : null,
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(16),
+            borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
+          ),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(16),
+            borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(16),
+            borderSide: const BorderSide(color: Color(0xFF0F4C81), width: 1.8),
+          ),
+          contentPadding: const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
+          fillColor: Colors.white,
+          filled: true,
+        ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SUMMARY GRID
+// ─────────────────────────────────────────────────────────────────────────────
 class _SummaryGrid extends StatelessWidget {
   final _DashboardFilter selectedFilter;
   final ValueChanged<_DashboardFilter> onSelected;
@@ -230,37 +737,45 @@ class _SummaryGrid extends StatelessWidget {
           physics: const NeverScrollableScrollPhysics(),
           mainAxisSpacing: 12,
           crossAxisSpacing: 12,
-          childAspectRatio: 1.55,
+          childAspectRatio: 1.4,
           children: [
-            _MiniStatCard(
-              label: 'Urgent',
+            _StatCard(
+              label: 'Urgent Cases',
               value: '${red + orange}',
-              color: Colors.red,
-              icon: Icons.emergency_rounded,
+              subLabel: '$red Critical • $orange High',
+              color: const Color(0xFFEF4444),
+              bgColor: const Color(0xFFFEF2F2),
+              icon: Icons.error_rounded,
               selected: selectedFilter == _DashboardFilter.urgent,
               onTap: () => onSelected(_DashboardFilter.urgent),
             ),
-            _MiniStatCard(
-              label: 'Monitor',
+            _StatCard(
+              label: 'Needs Monitor',
               value: '$yellow',
-              color: Colors.amber[700]!,
+              subLabel: 'Moderate Risk',
+              color: const Color(0xFFD97706),
+              bgColor: const Color(0xFFFEF3C7),
               icon: Icons.monitor_heart_rounded,
               selected: selectedFilter == _DashboardFilter.monitor,
               onTap: () => onSelected(_DashboardFilter.monitor),
             ),
-            _MiniStatCard(
-              label: 'Stable',
+            _StatCard(
+              label: 'Stable Patients',
               value: '$green',
-              color: Colors.green,
+              subLabel: 'Low Risk Queue',
+              color: const Color(0xFF10B981),
+              bgColor: const Color(0xFFECFDF5),
               icon: Icons.check_circle_rounded,
               selected: selectedFilter == _DashboardFilter.stable,
               onTap: () => onSelected(_DashboardFilter.stable),
             ),
-            _MiniStatCard(
-              label: 'Patients',
+            _StatCard(
+              label: 'Total Patients',
               value: '${unique.length}',
-              color: const Color(0xFF0277BD),
-              icon: Icons.people_alt_rounded,
+              subLabel: 'All Triage Cases',
+              color: const Color(0xFF0F4C81),
+              bgColor: const Color(0xFFF0F9FF),
+              icon: Icons.groups_rounded,
               selected: selectedFilter == _DashboardFilter.allPatients,
               onTap: () => onSelected(_DashboardFilter.allPatients),
             ),
@@ -271,97 +786,169 @@ class _SummaryGrid extends StatelessWidget {
   }
 }
 
-class _MiniStatCard extends StatelessWidget {
+class _StatCard extends StatelessWidget {
   final String label;
   final String value;
+  final String subLabel;
   final Color color;
+  final Color bgColor;
   final IconData icon;
   final bool selected;
   final VoidCallback onTap;
 
-  const _MiniStatCard({
+  const _StatCard({
     required this.label,
     required this.value,
+    required this.subLabel,
     required this.color,
+    required this.bgColor,
     required this.icon,
     required this.selected,
     required this.onTap,
   });
+
   @override
   Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(18),
-      child: Container(
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(
-          color: selected ? color.withValues(alpha: 0.1) : Colors.white,
-          borderRadius: BorderRadius.circular(18),
-          border: Border.all(
-            color: selected ? color : color.withValues(alpha: 0.18),
-            width: selected ? 2 : 1,
-          ),
-        ),
-        child: Row(
-          children: [
-            Container(
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: color.withValues(alpha: 0.12),
-                borderRadius: BorderRadius.circular(14),
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(18),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: selected ? bgColor : Colors.white,
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(
+              color: selected ? color : const Color(0xFFE2E8F0),
+              width: selected ? 2 : 1,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: selected
+                    ? color.withValues(alpha: 0.15)
+                    : const Color(0xFF0F172A).withValues(alpha: 0.04),
+                blurRadius: selected ? 12 : 8,
+                offset: const Offset(0, 4),
               ),
-              child: Icon(icon, color: color),
-            ),
-            const SizedBox(width: 12),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Text(value, style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: color)),
-                Text(label, style: TextStyle(color: Colors.grey[700], fontSize: 12)),
-              ],
-            ),
-          ],
+            ],
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: color.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Icon(icon, color: color, size: 20),
+                  ),
+                  Text(
+                    value,
+                    style: TextStyle(
+                      fontSize: 22,
+                      fontWeight: FontWeight.w800,
+                      color: color,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 4),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    label,
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.bold,
+                      color: selected ? color : const Color(0xFF1E293B),
+                    ),
+                  ),
+                  Text(
+                    subLabel,
+                    style: TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w500,
+                      color: const Color(0xFF64748B),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
         ),
       ),
     );
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION PILLS / FILTER BAR
+// ─────────────────────────────────────────────────────────────────────────────
 class _SectionPills extends StatelessWidget {
   final _DashboardFilter selectedFilter;
   final ValueChanged<_DashboardFilter> onSelected;
+
   const _SectionPills({
     required this.selectedFilter,
     required this.onSelected,
   });
+
   @override
   Widget build(BuildContext context) {
-    return Wrap(
-      spacing: 10,
-      runSpacing: 10,
-      children: [
-        _pill('Triage', Icons.analytics_rounded, const Color(0xFF0277BD), _DashboardFilter.allPatients),
-        _pill('Urgent', Icons.emergency_rounded, Colors.red, _DashboardFilter.urgent),
-        _pill('Monitor', Icons.monitor_heart_rounded, Colors.amber[700]!, _DashboardFilter.monitor),
-        _pill('Stable', Icons.check_circle_rounded, Colors.green, _DashboardFilter.stable),
-        _pill('Pending', Icons.pending_actions_rounded, Colors.orange, _DashboardFilter.pending),
-        _pill('Prescriptions', Icons.medication_rounded, Colors.deepPurple, _DashboardFilter.prescriptions),
-        _pill('Activity', Icons.history_rounded, const Color(0xFF2E7D32), _DashboardFilter.activity),
-      ],
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      physics: const BouncingScrollPhysics(),
+      child: Row(
+        children: [
+          _pill('All Triage', Icons.analytics_rounded, const Color(0xFF0F4C81), _DashboardFilter.allPatients),
+          const SizedBox(width: 8),
+          _pill('Urgent', Icons.emergency_rounded, const Color(0xFFEF4444), _DashboardFilter.urgent),
+          const SizedBox(width: 8),
+          _pill('Monitor', Icons.monitor_heart_rounded, const Color(0xFFD97706), _DashboardFilter.monitor),
+          const SizedBox(width: 8),
+          _pill('Stable', Icons.check_circle_rounded, const Color(0xFF10B981), _DashboardFilter.stable),
+          const SizedBox(width: 8),
+          _pill('Pending Review', Icons.pending_actions_rounded, const Color(0xFFF97316), _DashboardFilter.pending),
+          const SizedBox(width: 8),
+          _pill('Prescriptions', Icons.medication_rounded, const Color(0xFF8B5CF6), _DashboardFilter.prescriptions),
+          const SizedBox(width: 8),
+          _pill('Activity Log', Icons.history_rounded, const Color(0xFF059669), _DashboardFilter.activity),
+        ],
+      ),
     );
   }
 
   Widget _pill(String label, IconData icon, Color color, _DashboardFilter filter) {
     final selected = selectedFilter == filter;
-    return GestureDetector(
+    return InkWell(
       onTap: () => onSelected(filter),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      borderRadius: BorderRadius.circular(30),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
         decoration: BoxDecoration(
-          color: selected ? color : color.withValues(alpha: 0.12),
-          borderRadius: BorderRadius.circular(999),
-          border: Border.all(color: color.withValues(alpha: 0.28)),
+          color: selected ? color : Colors.white,
+          borderRadius: BorderRadius.circular(30),
+          border: Border.all(
+            color: selected ? color : const Color(0xFFE2E8F0),
+            width: selected ? 1.5 : 1,
+          ),
+          boxShadow: [
+            if (selected)
+              BoxShadow(
+                color: color.withValues(alpha: 0.25),
+                blurRadius: 8,
+                offset: const Offset(0, 3),
+              ),
+          ],
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
@@ -371,8 +958,9 @@ class _SectionPills extends StatelessWidget {
             Text(
               label,
               style: TextStyle(
-                color: selected ? Colors.white : color,
-                fontWeight: FontWeight.w600,
+                color: selected ? Colors.white : const Color(0xFF334155),
+                fontWeight: selected ? FontWeight.bold : FontWeight.w600,
+                fontSize: 12,
               ),
             ),
           ],
@@ -382,92 +970,42 @@ class _SectionPills extends StatelessWidget {
   }
 }
 
-class _ActivityFeedTab extends StatelessWidget {
-  final Set<String> myAshaIds;
-
-  const _ActivityFeedTab({required this.myAshaIds});
-
-  @override
-  Widget build(BuildContext context) {
-    return StreamBuilder<List<ActivityLog>>(
-      stream: FirebaseService.watchActivityLogs(limit: 100),
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Center(child: CircularProgressIndicator());
-        }
-
-        final rawLogs = snapshot.data ?? [];
-        final logs = rawLogs.where((l) => myAshaIds.contains(l.userId)).toList();
-
-        if (logs.isEmpty) {
-          return const _EmptyState(
-            icon: Icons.history_rounded,
-            title: 'No Activity Yet',
-            subtitle: 'ASHA, doctor, and admin actions will appear here',
-          );
-        }
-
-        return ListView.builder(
-          padding: const EdgeInsets.all(12),
-          itemCount: logs.length,
-          itemBuilder: (context, index) {
-            final log = logs[index];
-            return Card(
-              margin: const EdgeInsets.only(bottom: 8),
-              child: ListTile(
-                leading: Container(
-                  width: 40,
-                  height: 40,
-                  decoration: BoxDecoration(
-                    color: log.color.withValues(alpha: 0.15),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Icon(log.icon, color: log.color, size: 20),
-                ),
-                title: Text(log.description,
-                    style: const TextStyle(fontWeight: FontWeight.w500)),
-                subtitle: Text(
-                  '${log.userName} (${log.userRole.toUpperCase()}) • ${log.formattedTime}',
-                  style: TextStyle(color: Colors.grey[600], fontSize: 12),
-                ),
-                trailing: Icon(Icons.chevron_right, color: Colors.grey[400]),
-              ),
-            );
-          },
-        );
-      },
-    );
-  }
-}
-
+// ─────────────────────────────────────────────────────────────────────────────
+// PATIENT FEED PANEL
+// ─────────────────────────────────────────────────────────────────────────────
 class _PatientFeedPanel extends StatelessWidget {
   final _DashboardFilter filter;
   final Set<String> myAshaIds;
   final String? doctorId;
+  final String searchQuery;
 
   const _PatientFeedPanel({
     required this.filter,
     required this.myAshaIds,
     required this.doctorId,
+    required this.searchQuery,
   });
 
   @override
   Widget build(BuildContext context) {
     if (filter == _DashboardFilter.pending) {
-      return _PendingReviewTab(myAshaIds: myAshaIds);
+      return _PendingReviewTab(myAshaIds: myAshaIds, searchQuery: searchQuery);
     }
     if (filter == _DashboardFilter.prescriptions) {
-      return _PrescriptionsTab(doctorId: doctorId);
+      return _PrescriptionsTab(doctorId: doctorId, searchQuery: searchQuery);
     }
     if (filter == _DashboardFilter.activity) {
-      return _ActivityFeedTab(myAshaIds: myAshaIds);
+      return _ActivityFeedTab(myAshaIds: myAshaIds, searchQuery: searchQuery);
     }
 
     return StreamBuilder<List<TriageReport>>(
       stream: FirebaseService.watchTriageReports(),
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Center(child: CircularProgressIndicator());
+          return const Padding(
+            padding: EdgeInsets.all(32),
+            child: Center(child: CircularProgressIndicator(color: Color(0xFF0F4C81))),
+          );
         }
 
         final rawReports = snapshot.data ?? [];
@@ -478,9 +1016,15 @@ class _PatientFeedPanel extends StatelessWidget {
         }
 
         var items = latestByPatient.values.toList();
+
+        // 1. Filter by Dashboard Risk Filter
         switch (filter) {
           case _DashboardFilter.urgent:
-            items = items.where((r) => r.triageResult.riskCategory == 'Red' || r.triageResult.riskCategory == 'Orange').toList();
+            items = items
+                .where((r) =>
+                    r.triageResult.riskCategory == 'Red' ||
+                    r.triageResult.riskCategory == 'Orange')
+                .toList();
             break;
           case _DashboardFilter.monitor:
             items = items.where((r) => r.triageResult.riskCategory == 'Yellow').toList();
@@ -495,17 +1039,33 @@ class _PatientFeedPanel extends StatelessWidget {
             break;
         }
 
+        // 2. Filter by Search Query
+        if (searchQuery.isNotEmpty) {
+          items = items.where((r) {
+            final patientMatch = r.patientName.toLowerCase().contains(searchQuery);
+            final ashaMatch = r.ashaName.toLowerCase().contains(searchQuery);
+            final summaryMatch = r.triageResult.patientSummary.toLowerCase().contains(searchQuery);
+            final symptomsMatch = r.triageResult.symptoms
+                .any((s) => s.toLowerCase().contains(searchQuery));
+            return patientMatch || ashaMatch || summaryMatch || symptomsMatch;
+          }).toList();
+        }
+
         items.sort((a, b) => b.createdAt.compareTo(a.createdAt));
 
         if (items.isEmpty) {
-          return const _EmptyState(
-            icon: Icons.people_outline_rounded,
-            title: 'No Patients Found',
-            subtitle: 'Try another filter tile above.',
+          return _EmptyState(
+            icon: Icons.search_off_rounded,
+            title: searchQuery.isNotEmpty ? 'No Matching Patients' : 'No Patients Found',
+            subtitle: searchQuery.isNotEmpty
+                ? 'No patient matches "$searchQuery". Try clearing search.'
+                : 'No patients in this category yet.',
           );
         }
 
         return ListView.builder(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
           itemCount: items.length,
           itemBuilder: (context, index) => _PatientTriageTile(report: items[index]),
         );
@@ -514,7 +1074,9 @@ class _PatientFeedPanel extends StatelessWidget {
   }
 }
 
-
+// ─────────────────────────────────────────────────────────────────────────────
+// PATIENT TRIAGE TILE
+// ─────────────────────────────────────────────────────────────────────────────
 class _PatientTriageTile extends StatelessWidget {
   final TriageReport report;
 
@@ -522,62 +1084,349 @@ class _PatientTriageTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final riskColor = switch (report.triageResult.riskCategory) {
-      'Red' => Colors.red,
-      'Orange' => Colors.orange,
-      'Yellow' => Colors.amber[700]!,
-      _ => Colors.green,
+    final (riskColor, riskBgColor, riskBorderColor, riskLabel) = switch (
+        report.triageResult.riskCategory) {
+      'Red' => (
+          const Color(0xFFEF4444),
+          const Color(0xFFFEF2F2),
+          const Color(0xFFFCA5A5),
+          'CRITICAL RED'
+        ),
+      'Orange' => (
+          const Color(0xFFF97316),
+          const Color(0xFFFFF7ED),
+          const Color(0xFFFDBA74),
+          'HIGH ORANGE'
+        ),
+      'Yellow' => (
+          const Color(0xFFD97706),
+          const Color(0xFFFEF3C7),
+          const Color(0xFFFDE68A),
+          'MONITOR YELLOW'
+        ),
+      _ => (
+          const Color(0xFF10B981),
+          const Color(0xFFECFDF5),
+          const Color(0xFFA7F3D0),
+          'STABLE GREEN'
+        ),
     };
 
-    return Card(
+    final isPending = !report.reviewedByDoctor;
+
+    return Container(
       margin: const EdgeInsets.only(bottom: 12),
-      child: ListTile(
-        leading: CircleAvatar(
-          backgroundColor: riskColor.withValues(alpha: 0.15),
-          child: Text(
-            report.patientName.isNotEmpty ? report.patientName[0].toUpperCase() : '?',
-            style: TextStyle(color: riskColor, fontWeight: FontWeight.bold),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(
+          color: isPending ? riskColor.withValues(alpha: 0.35) : const Color(0xFFE2E8F0),
+          width: isPending ? 1.5 : 1,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFF0F172A).withValues(alpha: 0.05),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
           ),
-        ),
-        title: Text(report.patientName, style: const TextStyle(fontWeight: FontWeight.w600)),
-        subtitle: Text(
-          '${report.ashaName} • ${report.triageResult.patientSummary}',
-          maxLines: 2,
-          overflow: TextOverflow.ellipsis,
-        ),
-        trailing: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              decoration: BoxDecoration(
-                color: riskColor.withValues(alpha: 0.1),
-                borderRadius: BorderRadius.circular(20),
+        ],
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(20),
+        child: IntrinsicHeight(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              // Left Risk Accent Bar
+              Container(
+                width: 6,
+                color: riskColor,
               ),
-              child: Text(
-                report.triageResult.riskCategory,
-                style: TextStyle(color: riskColor, fontWeight: FontWeight.bold, fontSize: 11),
-              ),
-            ),
-              const SizedBox(width: 8),
-              IconButton(
-                icon: const Icon(Icons.chat_bubble_outline_rounded),
-                color: const Color(0xFF0277BD),
-                tooltip: 'Open ASHA chat',
-                onPressed: () {
-                  final visitId = report.visitId.isNotEmpty ? report.visitId : null;
-                  if (visitId == null) {
-                    context.push('/dashboard/doctor/patient/${report.patientId}');
-                    return;
-                  }
-                  context.push('/chat/${report.patientId}/$visitId');
-                },
+
+              // Card Content
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.all(14),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // Header Row
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          // Patient Avatar
+                          CircleAvatar(
+                            radius: 22,
+                            backgroundColor: riskColor.withValues(alpha: 0.12),
+                            child: Text(
+                              report.patientName.isNotEmpty
+                                  ? report.patientName[0].toUpperCase()
+                                  : '?',
+                              style: TextStyle(
+                                color: riskColor,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 18,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+
+                          // Patient Name & Subtitle
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    Expanded(
+                                      child: Text(
+                                        report.patientName,
+                                        style: const TextStyle(
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: 16,
+                                          color: Color(0xFF0F172A),
+                                        ),
+                                      ),
+                                    ),
+                                    // Risk Category Badge
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 8, vertical: 3),
+                                      decoration: BoxDecoration(
+                                        color: riskBgColor,
+                                        borderRadius: BorderRadius.circular(8),
+                                        border: Border.all(color: riskBorderColor),
+                                      ),
+                                      child: Text(
+                                        riskLabel,
+                                        style: TextStyle(
+                                          fontSize: 10,
+                                          color: riskColor,
+                                          fontWeight: FontWeight.bold,
+                                          letterSpacing: 0.2,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 3),
+                                Row(
+                                  children: [
+                                    const Icon(Icons.person_outline_rounded,
+                                        size: 13, color: Color(0xFF64748B)),
+                                    const SizedBox(width: 3),
+                                    Text(
+                                      'ASHA: ${report.ashaName}',
+                                      style: const TextStyle(
+                                        fontSize: 12,
+                                        color: Color(0xFF64748B),
+                                        fontWeight: FontWeight.w500,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    const Text('•', style: TextStyle(color: Color(0xFFCBD5E1))),
+                                    const SizedBox(width: 8),
+                                    Icon(Icons.schedule_rounded,
+                                        size: 12, color: Colors.grey[500]),
+                                    const SizedBox(width: 3),
+                                    Text(
+                                      _formatDate(report.createdAt),
+                                      style: TextStyle(
+                                          fontSize: 11, color: Colors.grey[600]),
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+
+                      const SizedBox(height: 10),
+
+                      // Patient Summary Text Box
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFF8FAFC),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: const Color(0xFFF1F5F9)),
+                        ),
+                        child: Text(
+                          report.triageResult.patientSummary.isNotEmpty
+                              ? report.triageResult.patientSummary
+                              : 'Voice triage recorded by ASHA worker.',
+                          style: const TextStyle(
+                            fontSize: 13,
+                            color: Color(0xFF334155),
+                            height: 1.35,
+                          ),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+
+                      // Symptoms Chips (if available)
+                      if (report.triageResult.symptoms.isNotEmpty) ...[
+                        const SizedBox(height: 8),
+                        Wrap(
+                          spacing: 6,
+                          runSpacing: 4,
+                          children: report.triageResult.symptoms.take(3).map((sym) {
+                            return Container(
+                              padding:
+                                  const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFF1F5F9),
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                              child: Text(
+                                '• $sym',
+                                style: const TextStyle(
+                                  fontSize: 11,
+                                  color: Color(0xFF475569),
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                            );
+                          }).toList(),
+                        ),
+                      ],
+
+                      const SizedBox(height: 12),
+
+                      // Doctor Action Toolbar (Highly accessible big buttons)
+                      Row(
+                        children: [
+                          // 1. Open Doctor Sheet Button (Primary clinical action)
+                          Expanded(
+                            child: ElevatedButton.icon(
+                              onPressed: () => context
+                                  .push('/doctor-sheet/${report.patientId}'),
+                              icon: const Icon(Icons.assignment_rounded, size: 16),
+                              label: const Text(
+                                'Doctor Sheet',
+                                style: TextStyle(
+                                    fontSize: 12, fontWeight: FontWeight.bold),
+                              ),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: const Color(0xFF0F4C81),
+                                foregroundColor: Colors.white,
+                                elevation: 0,
+                                padding: const EdgeInsets.symmetric(vertical: 10),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+
+                          // 2. Prescribe Button
+                          OutlinedButton.icon(
+                            onPressed: () => context.push(
+                                '/prescription/${report.patientId}/${report.visitId}'),
+                            icon: const Icon(Icons.medication_rounded,
+                                size: 16, color: Color(0xFF8B5CF6)),
+                            label: const Text(
+                              'Prescribe',
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.bold,
+                                color: Color(0xFF8B5CF6),
+                              ),
+                            ),
+                            style: OutlinedButton.styleFrom(
+                              side: const BorderSide(color: Color(0xFFDDD6FE)),
+                              backgroundColor: const Color(0xFFF5F3FF),
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 12, vertical: 10),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+
+                          // 3. Chat with ASHA Button
+                          IconButton(
+                            onPressed: () {
+                              final visitId = report.visitId.isNotEmpty
+                                  ? report.visitId
+                                  : null;
+                              if (visitId == null) {
+                                context.push(
+                                    '/dashboard/doctor/patient/${report.patientId}');
+                                return;
+                              }
+                              context.push('/chat/${report.patientId}/$visitId');
+                            },
+                            icon: const Icon(Icons.chat_bubble_outline_rounded, size: 20),
+                            color: const Color(0xFF0284C7),
+                            tooltip: 'Chat with ASHA',
+                            style: IconButton.styleFrom(
+                              backgroundColor: const Color(0xFFF0F9FF),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                            ),
+                          ),
+
+                          // 4. Mark Reviewed Checkbox
+                          const SizedBox(width: 4),
+                          IconButton(
+                            onPressed: () async {
+                              await FirebaseService.markReportReviewed(report.id);
+                              if (context.mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text(report.reviewedByDoctor
+                                        ? 'Report marked unreviewed'
+                                        : 'Report marked as reviewed'),
+                                    backgroundColor: const Color(0xFF0F4C81),
+                                    duration: const Duration(seconds: 2),
+                                  ),
+                                );
+                              }
+                            },
+                            icon: Icon(
+                              report.reviewedByDoctor
+                                  ? Icons.check_circle_rounded
+                                  : Icons.circle_outlined,
+                              size: 22,
+                              color: report.reviewedByDoctor
+                                  ? const Color(0xFF10B981)
+                                  : const Color(0xFF94A3B8),
+                            ),
+                            tooltip: report.reviewedByDoctor
+                                ? 'Reviewed'
+                                : 'Mark Reviewed',
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
               ),
             ],
           ),
-        onTap: () => context.push('/dashboard/doctor/patient/${report.patientId}'),
+        ),
       ),
     );
+  }
+
+  String _formatDate(DateTime date) {
+    final now = DateTime.now();
+    final diff = now.difference(date);
+    if (diff.inMinutes < 60) {
+      return '${diff.inMinutes}m ago';
+    } else if (diff.inHours < 24) {
+      return '${diff.inHours}h ago';
+    } else if (diff.inDays == 1) {
+      return 'Yesterday';
+    }
+    return '${date.day}/${date.month}/${date.year}';
   }
 }
 
@@ -586,8 +1435,12 @@ class _PatientTriageTile extends StatelessWidget {
 // ─────────────────────────────────────────────────────────────────────────────
 class _PendingReviewTab extends StatelessWidget {
   final Set<String> myAshaIds;
+  final String searchQuery;
 
-  const _PendingReviewTab({required this.myAshaIds});
+  const _PendingReviewTab({
+    required this.myAshaIds,
+    required this.searchQuery,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -595,27 +1448,38 @@ class _PendingReviewTab extends StatelessWidget {
       stream: FirebaseService.watchTriageReports(),
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Center(child: CircularProgressIndicator());
+          return const Padding(
+            padding: EdgeInsets.all(32),
+            child: Center(child: CircularProgressIndicator(color: Color(0xFF0F4C81))),
+          );
         }
 
         final rawReports = snapshot.data ?? [];
         final reports = rawReports.where((r) => myAshaIds.contains(r.ashaId)).toList();
-        final pending = reports.where((r) => !r.reviewedByDoctor).toList();
+        var pending = reports.where((r) => !r.reviewedByDoctor).toList();
+
+        if (searchQuery.isNotEmpty) {
+          pending = pending.where((r) {
+            return r.patientName.toLowerCase().contains(searchQuery) ||
+                r.ashaName.toLowerCase().contains(searchQuery);
+          }).toList();
+        }
 
         if (pending.isEmpty) {
           return const _EmptyState(
-            icon: Icons.check_circle_outline,
+            icon: Icons.task_alt_rounded,
             title: 'All Caught Up!',
-            subtitle: 'No pending triage reports to review',
+            subtitle: 'No pending triage reports requiring your review',
           );
         }
 
         return ListView.builder(
-          padding: const EdgeInsets.all(12),
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
           itemCount: pending.length,
           itemBuilder: (context, index) {
             final report = pending[index];
-            return _TriageReportCard(report: report, highlightPending: true);
+            return _PatientTriageTile(report: report);
           },
         );
       },
@@ -628,8 +1492,12 @@ class _PendingReviewTab extends StatelessWidget {
 // ─────────────────────────────────────────────────────────────────────────────
 class _PrescriptionsTab extends StatelessWidget {
   final String? doctorId;
+  final String searchQuery;
 
-  const _PrescriptionsTab({required this.doctorId});
+  const _PrescriptionsTab({
+    required this.doctorId,
+    required this.searchQuery,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -637,25 +1505,35 @@ class _PrescriptionsTab extends StatelessWidget {
       stream: FirebaseService.watchPrescriptions(doctorId: doctorId),
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Center(child: CircularProgressIndicator());
+          return const Padding(
+            padding: EdgeInsets.all(32),
+            child: Center(child: CircularProgressIndicator(color: Color(0xFF0F4C81))),
+          );
         }
 
-        final prescriptions = snapshot.data ?? [];
+        var prescriptions = snapshot.data ?? [];
+
+        if (searchQuery.isNotEmpty) {
+          prescriptions = prescriptions.where((p) {
+            return p.patientName.toLowerCase().contains(searchQuery) ||
+                p.diagnosis.toLowerCase().contains(searchQuery);
+          }).toList();
+        }
 
         if (prescriptions.isEmpty) {
           return const _EmptyState(
             icon: Icons.medication_outlined,
-            title: 'No Prescriptions',
-            subtitle: 'Prescriptions will appear here after creating them',
+            title: 'No Prescriptions Found',
+            subtitle: 'Prescriptions created by you will appear here',
           );
         }
 
         return ListView.builder(
-          padding: const EdgeInsets.all(12),
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
           itemCount: prescriptions.length,
           itemBuilder: (context, index) {
-            final prescription = prescriptions[index];
-            return _PrescriptionCard(prescription: prescription);
+            return _PrescriptionCard(prescription: prescriptions[index]);
           },
         );
       },
@@ -664,488 +1542,84 @@ class _PrescriptionsTab extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TRIAGE REPORT CARD
+// ACTIVITY FEED TAB
 // ─────────────────────────────────────────────────────────────────────────────
-class _TriageReportCard extends StatelessWidget {
-  final TriageReport report;
-  final bool highlightPending;
+class _ActivityFeedTab extends StatelessWidget {
+  final Set<String> myAshaIds;
+  final String searchQuery;
 
-  const _TriageReportCard({
-    required this.report,
-    this.highlightPending = false,
+  const _ActivityFeedTab({
+    required this.myAshaIds,
+    required this.searchQuery,
   });
 
-  Color get _riskColor {
-    switch (report.triageResult.riskCategory) {
-      case 'Red':
-        return Colors.red;
-      case 'Orange':
-        return Colors.orange;
-      case 'Yellow':
-        return Colors.amber[700]!;
-      default:
-        return Colors.green;
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final isPending = !report.reviewedByDoctor;
+    return StreamBuilder<List<ActivityLog>>(
+      stream: FirebaseService.watchActivityLogs(limit: 100),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Padding(
+            padding: EdgeInsets.all(32),
+            child: Center(child: CircularProgressIndicator(color: Color(0xFF0F4C81))),
+          );
+        }
 
-    return Card(
-      margin: const EdgeInsets.only(bottom: 12),
-      elevation: highlightPending && isPending ? 4 : 1,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16),
-        side: highlightPending && isPending
-            ? BorderSide(color: Colors.orange.withValues(alpha: 0.5), width: 2)
-            : BorderSide.none,
-      ),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(16),
-        onTap: () => _showReportDetail(context),
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // Header
-              Row(
-                children: [
-                  // Patient Avatar
-                  CircleAvatar(
-                    radius: 24,
-                    backgroundColor: _riskColor.withValues(alpha: 0.15),
-                    child: Text(
-                      report.patientName.isNotEmpty
-                          ? report.patientName[0].toUpperCase()
-                          : '?',
-                      style: TextStyle(
-                        color: _riskColor,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 18,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
+        final rawLogs = snapshot.data ?? [];
+        var logs = rawLogs.where((l) => myAshaIds.contains(l.userId)).toList();
 
-                  // Patient Info
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            Expanded(
-                              child: Text(
-                                report.patientName,
-                                style: const TextStyle(
-                                    fontWeight: FontWeight.w600, fontSize: 16),
-                              ),
-                            ),
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 8, vertical: 2),
-                              decoration: BoxDecoration(
-                                color: _riskColor.withValues(alpha: 0.12),
-                                borderRadius: BorderRadius.circular(10),
-                                border: Border.all(
-                                    color: _riskColor.withValues(alpha: 0.4)),
-                              ),
-                              child: Text(
-                                report.triageResult.riskCategory,
-                                style: TextStyle(
-                                  fontSize: 10,
-                                  color: _riskColor,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          'ASHA: ${report.ashaName} • ${_formatDate(report.createdAt)}',
-                          style: TextStyle(
-                              fontSize: 12, color: Colors.grey[600]),
-                        ),
-                      ],
-                    ),
-                  ),
+        if (searchQuery.isNotEmpty) {
+          logs = logs.where((l) {
+            return l.description.toLowerCase().contains(searchQuery) ||
+                l.userName.toLowerCase().contains(searchQuery);
+          }).toList();
+        }
 
-                  // Status Icon
-                  Column(
-                    children: [
-                      Icon(
-                        report.reviewedByDoctor
-                            ? Icons.check_circle
-                            : Icons.pending,
-                        color: report.reviewedByDoctor ? Colors.green : Colors.orange,
-                        size: 28,
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        report.reviewedByDoctor ? 'Reviewed' : 'Pending',
-                        style: TextStyle(
-                          fontSize: 10,
-                          color: report.reviewedByDoctor ? Colors.green : Colors.orange,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
+        if (logs.isEmpty) {
+          return const _EmptyState(
+            icon: Icons.history_rounded,
+            title: 'No Activity Yet',
+            subtitle: 'ASHA, doctor, and patient actions will log here',
+          );
+        }
+
+        return ListView.builder(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          itemCount: logs.length,
+          itemBuilder: (context, index) {
+            final log = logs[index];
+            return Container(
+              margin: const EdgeInsets.only(bottom: 8),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: const Color(0xFFE2E8F0)),
               ),
-
-              const SizedBox(height: 16),
-
-              // Transcript Summary
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: Colors.grey[50],
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Icon(Icons.mic_rounded, size: 16, color: Colors.grey[600]),
-                        const SizedBox(width: 6),
-                        Text('Voice Transcript',
-                            style: TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w600,
-                                color: Colors.grey[600])),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      report.transcript,
-                      style: theme.textTheme.bodyMedium?.copyWith(height: 1.4),
-                      maxLines: 3,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ],
-                ),
-              ),
-
-              const SizedBox(height: 12),
-
-              // Triage Details
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  _DetailChip(
-                    icon: Icons.favorite_rounded,
-                    label: 'Severity: ${report.triageResult.severity}',
-                    color: _riskColor,
-                  ),
-                  _DetailChip(
-                    icon: Icons.score_rounded,
-                    label: 'Risk Score: ${report.triageResult.riskScore}/10',
-                    color: _riskColor,
-                  ),
-                  if (report.triageResult.doctorRequired)
-                    _DetailChip(
-                      icon: Icons.medical_services_rounded,
-                      label: 'Doctor Required',
-                      color: Colors.red,
-                    ),
-                  if (report.triageResult.emergencyRequired)
-                    _DetailChip(
-                      icon: Icons.emergency_rounded,
-                      label: 'EMERGENCY',
-                      color: Colors.red,
-                    ),
-                ],
-              ),
-
-              // Action Buttons
-              if (isPending) ...[
-                const SizedBox(height: 12),
-                Row(
-                  children: [
-                    Expanded(
-                      child: OutlinedButton.icon(
-                        onPressed: () => _markReviewed(context),
-                        icon: const Icon(Icons.visibility_rounded, size: 18),
-                        label: const Text('Review'),
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: const Color(0xFF0277BD),
-                          side: const BorderSide(color: Color(0xFF0277BD)),
-                          shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(10)),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: FilledButton.icon(
-                        onPressed: () => _createPrescription(context),
-                        icon: const Icon(Icons.medication_rounded, size: 18),
-                        label: const Text('Prescribe'),
-                        style: FilledButton.styleFrom(
-                          backgroundColor: const Color(0xFF0277BD),
-                          shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(10)),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  String _formatDate(DateTime date) {
-    final now = DateTime.now();
-    if (now.difference(date).inDays == 0) {
-      return 'Today ${date.hour}:${date.minute.toString().padLeft(2, '0')}';
-    }
-    return '${date.day}/${date.month}/${date.year}';
-  }
-
-  void _showReportDetail(BuildContext context) {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (ctx) => _TriageDetailSheet(report: report),
-    );
-  }
-
-  void _markReviewed(BuildContext context) async {
-    await FirebaseService.markReportReviewed(report.id);
-    if (context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Report marked as reviewed')),
-      );
-    }
-  }
-
-  void _createPrescription(BuildContext context) {
-    context.push('/prescription/${report.patientId}/${report.visitId}');
-  }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// TRIAGE DETAIL SHEET
-// ─────────────────────────────────────────────────────────────────────────────
-class _TriageDetailSheet extends StatelessWidget {
-  final TriageReport report;
-
-  const _TriageDetailSheet({required this.report});
-
-  Color get _riskColor {
-    switch (report.triageResult.riskCategory) {
-      case 'Red':
-        return Colors.red;
-      case 'Orange':
-        return Colors.orange;
-      case 'Yellow':
-        return Colors.amber[700]!;
-      default:
-        return Colors.green;
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return DraggableScrollableSheet(
-      initialChildSize: 0.7,
-      maxChildSize: 0.95,
-      minChildSize: 0.5,
-      builder: (context, scrollController) => Container(
-        decoration: const BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-        ),
-        child: SingleChildScrollView(
-          controller: scrollController,
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // Handle
-              Center(
-                child: Container(
-                  width: 40,
-                  height: 4,
+              child: ListTile(
+                leading: Container(
+                  width: 38,
+                  height: 38,
                   decoration: BoxDecoration(
-                    color: Colors.grey[300],
-                    borderRadius: BorderRadius.circular(2),
+                    color: log.color.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(10),
                   ),
+                  child: Icon(log.icon, color: log.color, size: 20),
+                ),
+                title: Text(
+                  log.description,
+                  style: const TextStyle(
+                      fontWeight: FontWeight.w600, fontSize: 14, color: Color(0xFF0F172A)),
+                ),
+                subtitle: Text(
+                  '${log.userName} (${log.userRole.toUpperCase()}) • ${log.formattedTime}',
+                  style: const TextStyle(color: Color(0xFF64748B), fontSize: 11),
                 ),
               ),
-              const SizedBox(height: 20),
-
-              // Header
-              Row(
-                children: [
-                  CircleAvatar(
-                    radius: 32,
-                    backgroundColor: _riskColor.withValues(alpha: 0.15),
-                    child: Text(
-                      report.patientName.isNotEmpty
-                          ? report.patientName[0].toUpperCase()
-                          : '?',
-                      style: TextStyle(
-                        color: _riskColor,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 24,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 16),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(report.patientName,
-                            style: const TextStyle(
-                                fontSize: 22, fontWeight: FontWeight.bold)),
-                        const SizedBox(height: 4),
-                        Row(
-                          children: [
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 10, vertical: 4),
-                              decoration: BoxDecoration(
-                                color: _riskColor.withValues(alpha: 0.12),
-                                borderRadius: BorderRadius.circular(12),
-                                border: Border.all(
-                                    color: _riskColor.withValues(alpha: 0.4)),
-                              ),
-                              child: Text(
-                                '${report.triageResult.riskCategory} Risk',
-                                style: TextStyle(
-                                  color: _riskColor,
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 12,
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            Text(
-                              report.reviewedByDoctor ? '✓ Reviewed' : '⏳ Pending',
-                              style: TextStyle(
-                                color: report.reviewedByDoctor
-                                    ? Colors.green
-                                    : Colors.orange,
-                                fontWeight: FontWeight.w600,
-                                fontSize: 12,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-
-              const SizedBox(height: 24),
-
-              // Triage Details
-              _buildDetailSection('Patient Summary', report.triageResult.patientSummary),
-              _buildDetailSection('Symptoms', report.triageResult.symptoms.join(', ')),
-              _buildDetailSection('Suggested Action', report.triageResult.suggestedAction),
-              _buildDetailSection('Medical Notes', report.triageResult.medicalNotes),
-              _buildDetailSection('Follow-up Time', report.triageResult.followUpTime),
-
-              // Vitals
-              if (report.triageResult.vitals.isNotEmpty) ...[
-                const SizedBox(height: 16),
-                Text('Vitals', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold)),
-                const SizedBox(height: 8),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: report.triageResult.vitals.entries.map((e) => Chip(
-                    label: Text('${e.key}: ${e.value}'),
-                    backgroundColor: Colors.grey[100],
-                  )).toList(),
-                ),
-              ],
-
-              const SizedBox(height: 24),
-
-              // Full Transcript
-              Text('Full Voice Transcript', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold)),
-              const SizedBox(height: 8),
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: Colors.grey[50],
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Text(report.transcript, style: const TextStyle(height: 1.5)),
-              ),
-
-              const SizedBox(height: 24),
-
-              // Action Buttons
-              if (!report.reviewedByDoctor) ...[
-                Row(
-                  children: [
-                    Expanded(
-                      child: OutlinedButton.icon(
-                        onPressed: () {
-                          Navigator.pop(context);
-                          FirebaseService.markReportReviewed(report.id);
-                        },
-                        icon: const Icon(Icons.check_circle_outline),
-                        label: const Text('Mark Reviewed'),
-                        style: OutlinedButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(vertical: 16),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: FilledButton.icon(
-                        onPressed: () {
-                          Navigator.pop(context);
-                          context.push('/prescription/${report.patientId}/${report.visitId}');
-                        },
-                        icon: const Icon(Icons.medication),
-                        label: const Text('Create Prescription'),
-                        style: FilledButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(vertical: 16),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildDetailSection(String title, String content) {
-    if (content.isEmpty) return const SizedBox.shrink();
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(title, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
-          const SizedBox(height: 6),
-          Text(content, style: TextStyle(color: Colors.grey[700], height: 1.4)),
-        ],
-      ),
+            );
+          },
+        );
+      },
     );
   }
 }
@@ -1160,252 +1634,130 @@ class _PrescriptionCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Card(
+    return Container(
       margin: const EdgeInsets.only(bottom: 12),
-      child: InkWell(
+      decoration: BoxDecoration(
+        color: Colors.white,
         borderRadius: BorderRadius.circular(16),
-        onTap: () => _showPrescriptionDetail(context),
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  CircleAvatar(
-                    radius: 20,
-                    backgroundColor: Colors.deepPurple.withValues(alpha: 0.15),
-                    child: Text(
-                      prescription.patientName.isNotEmpty
-                          ? prescription.patientName[0].toUpperCase()
-                          : '?',
-                      style: const TextStyle(
-                          color: Colors.deepPurple,
-                          fontWeight: FontWeight.bold,
-                          fontSize: 16),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(prescription.patientName,
-                            style: const TextStyle(
-                                fontWeight: FontWeight.w600, fontSize: 16)),
-                        const SizedBox(height: 2),
-                        Text(
-                          'Dr. ${prescription.doctorName} • ${prescription.formattedDate}',
-                          style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-                        ),
-                      ],
-                    ),
-                  ),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: prescription.isActive
-                          ? Colors.green.withValues(alpha: 0.12)
-                          : Colors.grey.withValues(alpha: 0.12),
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: Text(
-                      prescription.status.displayName,
-                      style: TextStyle(
-                        fontSize: 10,
-                        color: prescription.isActive ? Colors.green : Colors.grey,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
-              Text(prescription.diagnosis,
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(height: 1.4),
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis),
-              const SizedBox(height: 8),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: prescription.medications.map((med) => Chip(
-                  label: Text('${med.name} (${med.dosage})'),
-                  avatar: Icon(_getMedIcon(med.type), size: 16),
-                  backgroundColor: Colors.deepPurple.withValues(alpha: 0.1),
-                )).toList(),
-              ),
-            ],
+        border: Border.all(color: const Color(0xFFE2E8F0)),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFF0F172A).withValues(alpha: 0.04),
+            blurRadius: 8,
+            offset: const Offset(0, 3),
           ),
-        ),
+        ],
       ),
-    );
-  }
-
-  IconData _getMedIcon(MedicationType type) {
-    switch (type) {
-      case MedicationType.tablet:
-        return Icons.medication;
-      case MedicationType.capsule:
-        return Icons.medication_outlined;
-      case MedicationType.syrup:
-        return Icons.local_drink;
-      case MedicationType.injection:
-        return Icons.vaccines;
-      case MedicationType.drops:
-        return Icons.opacity;
-      case MedicationType.ointment:
-        return Icons.healing;
-      case MedicationType.inhaler:
-        return Icons.air;
-      default:
-        return Icons.medication;
-    }
-  }
-
-  void _showPrescriptionDetail(BuildContext context) {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (ctx) => _PrescriptionDetailSheet(prescription: prescription),
-    );
-  }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// PRESCRIPTION DETAIL SHEET
-// ─────────────────────────────────────────────────────────────────────────────
-class _PrescriptionDetailSheet extends StatelessWidget {
-  final Prescription prescription;
-
-  const _PrescriptionDetailSheet({required this.prescription});
-
-  @override
-  Widget build(BuildContext context) {
-    return DraggableScrollableSheet(
-      initialChildSize: 0.6,
-      maxChildSize: 0.9,
-      minChildSize: 0.4,
-      builder: (context, scrollController) => Container(
-        decoration: const BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-        ),
-        child: SingleChildScrollView(
-          controller: scrollController,
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Center(
-                child: Container(
-                  width: 40,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: Colors.grey[300],
-                    borderRadius: BorderRadius.circular(2),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                CircleAvatar(
+                  radius: 20,
+                  backgroundColor: const Color(0xFF8B5CF6).withValues(alpha: 0.12),
+                  child: Text(
+                    prescription.patientName.isNotEmpty
+                        ? prescription.patientName[0].toUpperCase()
+                        : '?',
+                    style: const TextStyle(
+                        color: Color(0xFF8B5CF6),
+                        fontWeight: FontWeight.bold,
+                        fontSize: 16),
                   ),
                 ),
-              ),
-              const SizedBox(height: 20),
-
-              // Header
-              Row(
-                children: [
-                  CircleAvatar(
-                    radius: 28,
-                    backgroundColor: Colors.deepPurple.withValues(alpha: 0.15),
-                    child: Text(
-                      prescription.patientName.isNotEmpty
-                          ? prescription.patientName[0].toUpperCase()
-                          : '?',
-                      style: const TextStyle(
-                          color: Colors.deepPurple,
-                          fontWeight: FontWeight.bold,
-                          fontSize: 20),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(prescription.patientName,
+                          style: const TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 16,
+                              color: Color(0xFF0F172A))),
+                      const SizedBox(height: 2),
+                      Text(
+                        'Dr. ${prescription.doctorName} • ${prescription.formattedDate}',
+                        style: const TextStyle(fontSize: 12, color: Color(0xFF64748B)),
+                      ),
+                    ],
+                  ),
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: prescription.isActive
+                        ? const Color(0xFFECFDF5)
+                        : const Color(0xFFF1F5F9),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(
+                      color: prescription.isActive
+                          ? const Color(0xFFA7F3D0)
+                          : const Color(0xFFCBD5E1),
                     ),
                   ),
-                  const SizedBox(width: 16),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(prescription.patientName,
-                            style: const TextStyle(
-                                fontSize: 20, fontWeight: FontWeight.bold)),
-                        Text('Dr. ${prescription.doctorName}',
-                            style: TextStyle(color: Colors.grey[600])),
-                      ],
+                  child: Text(
+                    prescription.status.displayName,
+                    style: TextStyle(
+                      fontSize: 10,
+                      color: prescription.isActive
+                          ? const Color(0xFF10B981)
+                          : const Color(0xFF64748B),
+                      fontWeight: FontWeight.bold,
                     ),
                   ),
-                ],
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Text(
+              'Diagnosis: ${prescription.diagnosis}',
+              style: const TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: Color(0xFF334155),
               ),
-
-              const SizedBox(height: 20),
-
-              // Diagnosis
-              _buildSection('Diagnosis', prescription.diagnosis),
-
-              // Medications
-              if (prescription.medications.isNotEmpty) ...[
-                const SizedBox(height: 16),
-                Text('Medications', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold)),
-                const SizedBox(height: 8),
-                ...prescription.medications.map((med) => Card(
-                  child: Padding(
-                    padding: const EdgeInsets.all(12),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
+            if (prescription.medications.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: prescription.medications.map((med) {
+                  return Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF5F3FF),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: const Color(0xFFDDD6FE)),
+                    ),
                     child: Row(
+                      mainAxisSize: MainAxisSize.min,
                       children: [
-                        Icon(_getMedIcon(med.type), color: Colors.deepPurple),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(med.name, style: const TextStyle(fontWeight: FontWeight.w600)),
-                              Text('${med.dosage} • ${med.frequency} • ${med.duration}',
-                                  style: TextStyle(color: Colors.grey[600], fontSize: 12)),
-                              if (med.instructions.isNotEmpty)
-                                Padding(
-                                  padding: const EdgeInsets.only(top: 4),
-                                  child: Text(med.instructions,
-                                      style: TextStyle(color: Colors.grey[700], fontSize: 13)),
-                                ),
-                            ],
+                        Icon(_getMedIcon(med.type),
+                            size: 14, color: const Color(0xFF8B5CF6)),
+                        const SizedBox(width: 4),
+                        Text(
+                          '${med.name} (${med.dosage})',
+                          style: const TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                            color: Color(0xFF6D28D9),
                           ),
                         ),
                       ],
                     ),
-                  ),
-                )),
-              ],
-
-              // Notes
-              if (prescription.notes.isNotEmpty) _buildSection('Notes', prescription.notes),
-              if (prescription.followUpInstructions.isNotEmpty)
-                _buildSection('Follow-up Instructions', prescription.followUpInstructions),
-              if (prescription.followUpDate != null)
-                _buildSection('Follow-up Date', '${prescription.followUpDate!.day}/${prescription.followUpDate!.month}/${prescription.followUpDate!.year}'),
-
-              const SizedBox(height: 24),
+                  );
+                }).toList(),
+              ),
             ],
-          ),
+          ],
         ),
-      ),
-    );
-  }
-
-  Widget _buildSection(String title, String content) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(title, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
-          const SizedBox(height: 6),
-          Text(content, style: TextStyle(color: Colors.grey[700], height: 1.4)),
-        ],
       ),
     );
   }
@@ -1433,7 +1785,7 @@ class _PrescriptionDetailSheet extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// EMPTY STATE
+// EMPTY STATE WIDGET
 // ─────────────────────────────────────────────────────────────────────────────
 class _EmptyState extends StatelessWidget {
   final IconData icon;
@@ -1448,59 +1800,43 @@ class _EmptyState extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(32),
+      child: Container(
+        margin: const EdgeInsets.symmetric(vertical: 24),
+        padding: const EdgeInsets.all(24),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: const Color(0xFFE2E8F0)),
+        ),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(icon, size: 64, color: Colors.grey[400]),
-            const SizedBox(height: 16),
-            Text(title, style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold)),
-            const SizedBox(height: 8),
-            Text(subtitle,
-                textAlign: TextAlign.center,
-                style: TextStyle(color: Colors.grey[600])),
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: const BoxDecoration(
+                color: Color(0xFFF1F5F9),
+                shape: BoxShape.circle,
+              ),
+              child: Icon(icon, size: 44, color: const Color(0xFF94A3B8)),
+            ),
+            const SizedBox(height: 14),
+            Text(
+              title,
+              style: const TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+                color: Color(0xFF0F172A),
+              ),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              subtitle,
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 12, color: Color(0xFF64748B)),
+            ),
           ],
         ),
-      ),
-    );
-  }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// DETAIL CHIP
-// ─────────────────────────────────────────────────────────────────────────────
-class _DetailChip extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final Color color;
-
-  const _DetailChip({
-    required this.icon,
-    required this.label,
-    required this.color,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.1),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: color.withValues(alpha: 0.3)),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 14, color: color),
-          const SizedBox(width: 6),
-          Text(label,
-              style: TextStyle(
-                  fontSize: 11, fontWeight: FontWeight.w600, color: color)),
-        ],
       ),
     );
   }

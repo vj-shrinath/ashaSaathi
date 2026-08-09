@@ -19,8 +19,17 @@ CREATE TABLE IF NOT EXISTS public.user_profiles (
   phc_id      UUID,                             -- parent PHC/facility
   doctor_id   UUID,                             -- ASHA's supervising doctor
   is_active   BOOLEAN     NOT NULL DEFAULT TRUE,
+  must_change_password BOOLEAN NOT NULL DEFAULT FALSE,
+  password_changed_at TIMESTAMPTZ,
   created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- Keep existing installations compatible with the current app/backend.
+ALTER TABLE public.user_profiles
+  ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN NOT NULL DEFAULT FALSE;
+
+ALTER TABLE public.user_profiles
+  ADD COLUMN IF NOT EXISTS password_changed_at TIMESTAMPTZ;
 
 CREATE TABLE IF NOT EXISTS public.phcs (
   id          UUID        PRIMARY KEY,

@@ -35,12 +35,30 @@ class _SplashScreenState extends State<SplashScreen>
     final session = Supabase.instance.client.auth.currentSession;
     if (!mounted) return;
     if (session == null) {
+      context.go('/auth/role');
+      return;
+    }
+
+    final profile = await Supabase.instance.client
+        .from('user_profiles')
+        .select('role, must_change_password, is_active')
+        .eq('id', session.user.id)
+        .maybeSingle();
+
+    if (!mounted) return;
+
+    if (profile == null || profile['is_active'] == false) {
+      await Supabase.instance.client.auth.signOut();
       context.go('/auth/login');
       return;
     }
 
-    final role = session.user.userMetadata?['role']?.toString();
-    switch (role) {
+    if (profile['must_change_password'] == true) {
+      context.go('/auth/change-password');
+      return;
+    }
+
+    switch ((profile['role'] as String?) ?? 'asha') {
       case 'doctor':
         context.go('/dashboard/doctor');
         break;

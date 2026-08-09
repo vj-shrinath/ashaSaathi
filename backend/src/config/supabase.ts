@@ -31,4 +31,5 @@ export const TABLES = {
   ACTIVITY_LOGS: 'activity_logs',
   DOCTOR_ALERTS: 'doctor_alerts',
   EMERGENCY_EVENTS: 'emergency_events',
+  GRAMNIDAN_REGISTERS: 'gramnidan_registers',
 } as const;

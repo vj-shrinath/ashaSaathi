@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../core/models/user_role.dart';
 
 class RoleSelectionScreen extends StatefulWidget {
   const RoleSelectionScreen({super.key});
@@ -10,35 +10,8 @@ class RoleSelectionScreen extends StatefulWidget {
 }
 
 class _RoleSelectionScreenState extends State<RoleSelectionScreen> {
-  bool _isSaving = false;
-
-  SupabaseClient get _supabase => Supabase.instance.client;
-
-  Future<void> _selectRole(String role) async {
-    if (_supabase.auth.currentUser == null) {
-      context.go('/auth/login/$role');
-      return;
-    }
-
-    setState(() => _isSaving = true);
-    await _supabase.auth.updateUser(
-      UserAttributes(
-        data: {'role': role},
-      ),
-    );
-    if (!mounted) return;
-    setState(() => _isSaving = false);
-
-    switch (role) {
-      case 'doctor':
-        context.go('/dashboard/doctor');
-        break;
-      case 'admin':
-        context.go('/admin');
-        break;
-      default:
-        context.go('/dashboard/asha');
-    }
+  void _selectRole(UserRole role) {
+    context.go('/auth/login?role=${role.value}');
   }
 
   @override
@@ -61,43 +34,50 @@ class _RoleSelectionScreenState extends State<RoleSelectionScreen> {
               ),
               const SizedBox(height: 8),
               Text(
-                'Choose how you want to demo the app',
+                'Choose your role to continue',
                 textAlign: TextAlign.center,
                 style: TextStyle(color: Colors.grey[600], fontSize: 16),
               ),
               const SizedBox(height: 48),
-              if (_isSaving)
-                const Center(child: CircularProgressIndicator())
-              else ...[
+              for (final role in UserRole.values)
                 _RoleCard(
-                  icon: Icons.medical_services_rounded,
-                  title: 'ASHA Worker',
-                  subtitle: 'Record patient visits and voice notes',
+                  icon: _iconFor(role),
+                  title: role.displayName,
+                  subtitle: _subtitleFor(role),
                   color: const Color(0xFF2E7D32),
-                  onTap: () => _selectRole('asha'),
+                  onTap: () => _selectRole(role),
                 ),
-                const SizedBox(height: 16),
-                _RoleCard(
-                  icon: Icons.local_hospital_rounded,
-                  title: 'Doctor',
-                  subtitle: 'View alerts and patient medical history',
-                  color: const Color(0xFF0277BD),
-                  onTap: () => _selectRole('doctor'),
-                ),
-                const SizedBox(height: 16),
-                _RoleCard(
-                  icon: Icons.admin_panel_settings_rounded,
-                  title: 'Admin',
-                  subtitle: 'Manage districts, workers and reports',
-                  color: const Color(0xFF6A1B9A),
-                  onTap: () => _selectRole('admin'),
-                ),
-              ],
             ],
           ),
         ),
       ),
     );
+  }
+
+  IconData _iconFor(UserRole role) {
+    switch (role) {
+      case UserRole.asha:
+        return Icons.health_and_safety_rounded;
+      case UserRole.doctor:
+        return Icons.medical_services_rounded;
+      case UserRole.tho:
+        return Icons.account_balance_rounded;
+      case UserRole.admin:
+        return Icons.admin_panel_settings_rounded;
+    }
+  }
+
+  String _subtitleFor(UserRole role) {
+    switch (role) {
+      case UserRole.asha:
+        return 'Manage patients and health visits';
+      case UserRole.doctor:
+        return 'Review patients and prescriptions';
+      case UserRole.tho:
+        return 'Review ASHA submitted registers';
+      case UserRole.admin:
+        return 'Manage users and health centers';
+    }
   }
 }
 

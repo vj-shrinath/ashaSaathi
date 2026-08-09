@@ -1,4 +1,6 @@
-enum MessageType { text, voice, triageResult, systemInfo, doctorSuggestion }
+import 'prescription.dart';
+
+enum MessageType { text, voice, triageResult, systemInfo, doctorSuggestion, prescription }
 
 class TriageResult {
   final String patientSummary;
@@ -79,6 +81,7 @@ class ChatMessage {
   final String? audioUrl;
   final String? transcript;
   final TriageResult? triageResult;
+  final Prescription? prescription;
   final String senderId;
   final String senderName;
   final DateTime timestamp;
@@ -93,13 +96,14 @@ class ChatMessage {
     this.audioUrl,
     this.transcript,
     this.triageResult,
+    this.prescription,
     required this.senderId,
     required this.senderName,
     required this.timestamp,
     this.isProcessing = false,
   });
 
-  factory ChatMessage.fromMap(Map<String, dynamic> data) {
+factory ChatMessage.fromMap(Map<String, dynamic> data) {
     return ChatMessage(
       id: data['id'] ?? '',
       type: MessageType.values.firstWhere(
@@ -117,6 +121,9 @@ class ChatMessage {
           : data['triageResult'] != null
               ? TriageResult.fromMap(
                   Map<String, dynamic>.from(data['triageResult']))
+              : null,
+      prescription: data['prescription'] != null
+          ? Prescription.fromMap(Map<String, dynamic>.from(data['prescription']))
           : null,
       senderId: data['sender_id'] ?? data['senderId'] ?? '',
       senderName: data['sender_name'] ?? data['senderName'] ?? 'ASHA Worker',
@@ -136,6 +143,7 @@ class ChatMessage {
         'audio_url': audioUrl,
         'transcript': transcript,
         'triage_result': triageResult?.toMap(),
+        'prescription': prescription?.toMap(),
         'sender_id': senderId,
         'sender_name': senderName,
         'timestamp': timestamp.toIso8601String(),

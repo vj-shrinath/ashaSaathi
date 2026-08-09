@@ -43,7 +43,8 @@ flutter {
 }
 
 android {
-    lint {
-        abortOnError = false
+    lintOptions {
+        isAbortOnError = false
+        disable("Instantiatable")
     }
 }

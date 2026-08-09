@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 import '../../core/models/message_model.dart';
+import '../../core/models/prescription.dart';
 import 'triage_report_card.dart';
 
 class ChatBubble extends StatelessWidget {
@@ -28,10 +30,18 @@ class ChatBubble extends StatelessWidget {
             report: message.triageResult!,
             transcript: message.transcript ?? '',
             compact: true,
+            onOpenDoctorSheet: message.patientId == null
+                ? null
+                : () => context.push('/doctor-sheet/${message.patientId}'),
           ),
         );
       case MessageType.doctorSuggestion:
         return _DoctorSuggestionBubble(
+          message: message,
+          isSentByMe: isSentByMe,
+        );
+      case MessageType.prescription:
+        return _PrescriptionBubble(
           message: message,
           isSentByMe: isSentByMe,
         );
@@ -449,5 +459,193 @@ class _DoctorSuggestionBubble extends StatelessWidget {
         ),
       ),
     );
+  }
+}
+
+// ─── Prescription Bubble ───────────────────────────────────────────────────────
+
+class _PrescriptionBubble extends StatelessWidget {
+  final ChatMessage message;
+  final bool isSentByMe;
+
+  const _PrescriptionBubble({required this.message, required this.isSentByMe});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final prescription = message.prescription;
+
+    if (prescription == null) return const SizedBox.shrink();
+
+    final borderColor = isDark ? Colors.deepPurple[300]! : Colors.deepPurple[700]!;
+    final bgColor = isDark ? Colors.deepPurple[900]!.withValues(alpha: 0.3) : Colors.deepPurple[50]!;
+
+    return Align(
+      alignment: isSentByMe ? Alignment.centerRight : Alignment.centerLeft,
+      child: Container(
+        margin: EdgeInsets.only(
+          left: isSentByMe ? 20 : 8,
+          right: isSentByMe ? 8 : 20,
+          top: 4,
+          bottom: 4,
+        ),
+        constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.85),
+        decoration: BoxDecoration(
+          color: bgColor,
+          borderRadius: BorderRadius.only(
+            topLeft: const Radius.circular(14),
+            topRight: const Radius.circular(14),
+            bottomLeft: Radius.circular(isSentByMe ? 14 : 4),
+            bottomRight: Radius.circular(isSentByMe ? 4 : 14),
+          ),
+          border: Border.all(color: borderColor.withValues(alpha: 0.3)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: borderColor.withValues(alpha: 0.15),
+                borderRadius: const BorderRadius.vertical(top: Radius.circular(14)),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.medication_rounded, color: Colors.deepPurple, size: 18),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Prescription from Dr. ${prescription.doctorName}',
+                      style: TextStyle(
+                        color: isDark ? Colors.deepPurple[200] : Colors.deepPurple[800],
+                        fontWeight: FontWeight.bold,
+                        fontSize: 13,
+                        letterSpacing: 0.3,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.all(12),
+              child: _PrescriptionContent(prescription: prescription),
+            ),
+            const SizedBox(height: 10),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Row(
+                  children: [
+                    Icon(
+                      Icons.verified_user_rounded,
+                      size: 14,
+                      color: isDark ? Colors.deepPurple[300] : Colors.deepPurple[700],
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      message.senderName,
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                        color: isDark ? Colors.white60 : Colors.black54,
+                      ),
+                    ),
+                  ],
+                ),
+                Text(
+                  _formatTime(message.timestamp),
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: isDark ? Colors.white60 : Colors.black45,
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _PrescriptionContent extends StatelessWidget {
+  final Prescription prescription;
+
+  const _PrescriptionContent({required this.prescription});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final textColor = isDark ? Colors.white : Colors.black87;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (prescription.diagnosis.isNotEmpty) ...[
+          Text('Diagnosis', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.deepPurple[700])),
+          const SizedBox(height: 4),
+          Text(prescription.diagnosis, style: TextStyle(fontSize: 13, color: textColor, height: 1.4)),
+          const SizedBox(height: 10),
+        ],
+        if (prescription.medications.isNotEmpty) ...[
+          Text('Medications', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.deepPurple[700])),
+          const SizedBox(height: 6),
+          ...prescription.medications.map((med) => Container(
+            margin: const EdgeInsets.only(bottom: 6),
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: isDark ? Colors.white.withValues(alpha: 0.05) : Colors.white,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: Colors.deepPurple.withValues(alpha: 0.2)),
+            ),
+            child: Row(
+              children: [
+                Icon(_getMedIcon(med.type), size: 16, color: Colors.deepPurple),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(med.name, style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: textColor)),
+                      Text('${med.dosage} • ${med.frequency} • ${med.duration}', style: TextStyle(fontSize: 11, color: textColor.withValues(alpha: 0.7))),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          )),
+          const SizedBox(height: 10),
+        ],
+        if (prescription.notes.isNotEmpty) ...[
+          Text('Notes', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.deepPurple[700])),
+          const SizedBox(height: 4),
+          Text(prescription.notes, style: TextStyle(fontSize: 13, color: textColor, height: 1.4)),
+        ],
+      ],
+    );
+  }
+
+  IconData _getMedIcon(MedicationType type) {
+    switch (type) {
+      case MedicationType.tablet:
+        return Icons.medication;
+      case MedicationType.capsule:
+        return Icons.medication_outlined;
+      case MedicationType.syrup:
+        return Icons.local_drink;
+      case MedicationType.injection:
+        return Icons.vaccines;
+      case MedicationType.drops:
+        return Icons.opacity;
+      case MedicationType.ointment:
+        return Icons.healing;
+      case MedicationType.inhaler:
+        return Icons.air;
+      default:
+        return Icons.medication;
+    }
   }
 }

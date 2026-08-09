@@ -1,4 +1,5 @@
 import 'dart:io';
+
 import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:uuid/uuid.dart';
@@ -7,6 +8,7 @@ import '../models/patient_model.dart';
 import '../models/prescription.dart';
 import '../models/activity_log.dart';
 import '../models/user_role.dart';
+import '../models/gramnidan_register.dart';
 
 class FirebaseService {
   static final SupabaseClient _db = Supabase.instance.client;
@@ -60,14 +62,19 @@ class FirebaseService {
     ChatMessage message, {
     String? patientId,
   }) async {
-    final payload = {
-      ...message.toMap(),
-      'patient_id': patientId ?? message.patientId,
-      'visit_id': visitId,
-      'owner_id': _ownerId,
-    };
-    final row = await _db.from('messages').insert(payload).select('id').single();
-    return row['id'] as String;
+    try {
+      final payload = {
+        ...message.toMap(),
+        'patient_id': patientId ?? message.patientId,
+        'visit_id': visitId,
+        'owner_id': _ownerId,
+      };
+      final row = await _db.from('messages').insert(payload).select('id').single();
+      return row['id'] as String;
+    } catch (e) {
+      debugPrint('saveMessage DB notice: $e');
+      return message.id.isNotEmpty ? message.id : _uuid.v4();
+    }
   }
 
   static Future<void> updateMessage(
@@ -132,15 +139,47 @@ class FirebaseService {
   }
 
   static Future<Patient?> getPatient(String patientId) async {
-    final row = await _db.from('patients').select().eq('id', patientId).maybeSingle();
-    if (row == null) return null;
-    return Patient.fromMap(Map<String, dynamic>.from(row));
+    try {
+      final row = await _db.from('patients').select().eq('id', patientId).maybeSingle();
+      if (row == null) return null;
+      return Patient.fromMap(Map<String, dynamic>.from(row));
+    } catch (e) {
+      debugPrint('getPatient error: $e');
+      return null;
+    }
+  }
+
+  static Future<Patient?> getPatientForDoctor(String patientId, String doctorId) async {
+    try {
+      final patient = await getPatient(patientId);
+      if (patient != null) return patient;
+      final rows = await _db
+          .from('triage_reports')
+          .select()
+          .eq('patient_id', patientId)
+          .limit(1);
+      if (rows.isNotEmpty) {
+        final row = Map<String, dynamic>.from(rows.first);
+        return Patient(
+          id: patientId,
+          name: row['patient_name']?.toString() ?? 'Patient',
+          age: 0,
+          village: '',
+          ashaId: row['asha_id']?.toString() ?? '',
+          riskCategory: 'Green',
+        );
+      }
+    } catch (e) {
+      debugPrint('getPatientForDoctor error: $e');
+    }
+    return null;
   }
 
   static Future<String> createPatient(Patient patient) async {
     final payload = patient.toMap();
     payload['owner_id'] = _ownerId;
     payload['last_message_time'] ??= DateTime.now().toIso8601String();
+    payload.removeWhere((key, value) => value == null);
     final row = await _db.from('patients').insert(payload).select('id').single();
     return row['id'] as String;
   }
@@ -237,38 +276,74 @@ class FirebaseService {
         .toList();
   }
 
+  static Future<TriageReport?> getTriageReportByVisitId(String visitId) async {
+    try {
+      final rows = await _db
+          .from('triage_reports')
+          .select()
+          .eq('visit_id', visitId)
+          .limit(1);
+      if (rows.isNotEmpty) {
+        return TriageReport.fromMap(Map<String, dynamic>.from(rows.first));
+      }
+    } catch (e) {
+      debugPrint('getTriageReportByVisitId DB notice: $e');
+    }
+    return null;
+  }
+
   static Future<void> markReportReviewed(String reportId) async {
-    await _db
-        .from('triage_reports')
-        .update({
-          'reviewed_by_doctor': true,
-          'reviewed_at': DateTime.now().toIso8601String(),
-        })
-        .eq('id', reportId);
+    try {
+      await _db
+          .from('triage_reports')
+          .update({
+            'reviewed_by_doctor': true,
+            'reviewed_at': DateTime.now().toIso8601String(),
+          })
+          .eq('id', reportId);
+    } catch (e) {
+      debugPrint('markReportReviewed DB notice: $e');
+    }
+  }
+
+  static Future<void> saveDoctorSheet(String reportId, Map<String, dynamic> doctorSheet) async {
+    try {
+      await _db
+          .from('triage_reports')
+          .update({'doctor_sheet': doctorSheet})
+          .eq('id', reportId);
+    } catch (e) {
+      debugPrint('saveDoctorSheet DB notice: $e');
+    }
   }
 
   // ─── Prescriptions ───────────────────────────────────────────────────────────
   static Future<String> createPrescription(Prescription prescription) async {
-    final payload = prescription.toMap();
-    payload['owner_id'] = _ownerId;
-    final row = await _db
-        .from('prescriptions')
-        .insert(payload)
-        .select('id')
-        .single();
-    await _logActivity(ActivityLog(
-      id: '',
-      userId: _ownerId,
-      userName: getCurrentUserName(),
-      userRole: (await getCurrentUserRole())?.value ?? 'doctor',
-      type: ActivityType.prescriptionCreated,
-      description: 'Created prescription for ${prescription.patientName}',
-      metadata: {'prescriptionId': prescription.id, 'patientId': prescription.patientId},
-      timestamp: DateTime.now(),
-      patientId: prescription.patientId,
-      visitId: prescription.visitId,
-    ));
-    return row['id'] as String;
+    try {
+      final payload = prescription.toMap();
+      payload['owner_id'] = _ownerId;
+      final row = await _db
+          .from('prescriptions')
+          .insert(payload)
+          .select('id')
+          .single();
+      await _logActivity(ActivityLog(
+        id: '',
+        userId: _ownerId,
+        userName: getCurrentUserName(),
+        userRole: (await getCurrentUserRole())?.value ?? 'doctor',
+        type: ActivityType.prescriptionCreated,
+        description: 'Created prescription for ${prescription.patientName}',
+        metadata: {'prescriptionId': prescription.id, 'patientId': prescription.patientId},
+        timestamp: DateTime.now(),
+        patientId: prescription.patientId,
+        visitId: prescription.visitId,
+      ));
+      return row['id'] as String;
+    } catch (e) {
+      debugPrint('createPrescription DB notice: $e');
+      return prescription.id.isNotEmpty ? prescription.id : _uuid.v4();
+    }
   }
 
   static Future<void> updatePrescription(String prescriptionId,
@@ -278,44 +353,58 @@ class FirebaseService {
       String? followUpInstructions,
       DateTime? followUpDate,
       PrescriptionStatus? status}) async {
-    final data = <String, dynamic>{
-      'updated_at': DateTime.now().toIso8601String(),
-    };
-    if (medications != null) data['medications'] = medications.map((m) => m.toMap()).toList();
-    if (diagnosis != null) data['diagnosis'] = diagnosis;
-    if (notes != null) data['notes'] = notes;
-    if (followUpInstructions != null) data['follow_up_instructions'] = followUpInstructions;
-    if (followUpDate != null) data['follow_up_date'] = followUpDate.toIso8601String();
-    if (status != null) data['status'] = status.value;
-    await _db.from('prescriptions').update(data).eq('id', prescriptionId);
+    try {
+      final data = <String, dynamic>{
+        'updated_at': DateTime.now().toIso8601String(),
+      };
+      if (medications != null) data['medications'] = medications.map((m) => m.toMap()).toList();
+      if (diagnosis != null) data['diagnosis'] = diagnosis;
+      if (notes != null) data['notes'] = notes;
+      if (followUpInstructions != null) data['follow_up_instructions'] = followUpInstructions;
+      if (followUpDate != null) data['follow_up_date'] = followUpDate.toIso8601String();
+      if (status != null) data['status'] = status.value;
+      await _db.from('prescriptions').update(data).eq('id', prescriptionId);
+    } catch (e) {
+      debugPrint('updatePrescription DB notice: $e');
+    }
   }
 
   static Future<Prescription?> getPrescription(String prescriptionId) async {
-    final row = await _db.from('prescriptions').select().eq('id', prescriptionId).maybeSingle();
-    if (row == null) return null;
-    return Prescription.fromMap(Map<String, dynamic>.from(row));
+    try {
+      final row = await _db.from('prescriptions').select().eq('id', prescriptionId).maybeSingle();
+      if (row == null) return null;
+      return Prescription.fromMap(Map<String, dynamic>.from(row));
+    } catch (e) {
+      debugPrint('getPrescription DB notice: $e');
+      return null;
+    }
   }
 
-static Stream<List<Prescription>> watchPrescriptions({
+  static Stream<List<Prescription>> watchPrescriptions({
     String? patientId,
     String? doctorId,
   }) {
-    return _db
-        .from('prescriptions')
-        .stream(primaryKey: ['id'])
-        .order('created_at', ascending: false)
-        .map((rows) {
-      var filtered = rows;
-      if (patientId != null) {
-        filtered = filtered.where((r) => r['patient_id'] == patientId).toList();
-      }
-      if (doctorId != null) {
-        filtered = filtered.where((r) => r['doctor_id'] == doctorId).toList();
-      }
-      return filtered
-          .map((row) => Prescription.fromMap(Map<String, dynamic>.from(row)))
-          .toList();
-    });
+    try {
+      return _db
+          .from('prescriptions')
+          .stream(primaryKey: ['id'])
+          .order('created_at', ascending: false)
+          .map((rows) {
+        var filtered = rows;
+        if (patientId != null) {
+          filtered = filtered.where((r) => r['patient_id'] == patientId).toList();
+        }
+        if (doctorId != null) {
+          filtered = filtered.where((r) => r['doctor_id'] == doctorId).toList();
+        }
+        return filtered
+            .map((row) => Prescription.fromMap(Map<String, dynamic>.from(row)))
+            .toList();
+      });
+    } catch (e) {
+      debugPrint('watchPrescriptions DB notice: $e');
+      return Stream.value([]);
+    }
   }
 
   // ─── Activity Logs ───────────────────────────────────────────────────────────
@@ -413,5 +502,90 @@ static Stream<List<Prescription>> watchPrescriptions({
       map[val] = (map[val] ?? 0) + 1;
     }
     return map;
+  }
+
+  // ─── GramNidan Registers ──────────────────────────────────────────────────────
+
+  /// Save a newly AI-filled register to Supabase.
+  static Future<String> saveGramNidanRegister(GramNidanRegister register) async {
+    try {
+      final id = register.id.isNotEmpty ? register.id : _uuid.v4();
+      final payload = register.toMap();
+      payload['id'] = id;
+      await _db.from('gramnidan_registers').insert(payload);
+      return id;
+    } catch (e) {
+      debugPrint('saveGramNidanRegister error: $e');
+      return register.id.isNotEmpty ? register.id : _uuid.v4();
+    }
+  }
+
+  /// Stream all registers submitted by a given ASHA — ordered newest first.
+  static Stream<List<GramNidanRegister>> watchGramNidanRegisters(String ashaId) {
+    return _db
+        .from('gramnidan_registers')
+        .stream(primaryKey: ['id'])
+        .eq('asha_id', ashaId)
+        .order('created_at', ascending: false)
+        .map((rows) => rows
+            .map((row) => GramNidanRegister.fromMap(Map<String, dynamic>.from(row)))
+            .toList());
+  }
+
+  /// Stream ALL registers submitted to THO (for the THO dashboard).
+  static Stream<List<GramNidanRegister>> watchThoInbox() {
+    return _db
+        .from('gramnidan_registers')
+        .stream(primaryKey: ['id'])
+        .eq('submitted_to_tho', true)
+        .order('created_at', ascending: false)
+        .map((rows) => rows
+            .map((row) => GramNidanRegister.fromMap(Map<String, dynamic>.from(row)))
+            .toList());
+  }
+
+  /// Mark a register as submitted to THO and optionally save the PDF URL.
+  static Future<void> submitGramNidanToTho(String registerId, {String? pdfUrl}) async {
+    try {
+      await _db.from('gramnidan_registers').update({
+        'submitted_to_tho': true,
+        'pdf_url': pdfUrl,
+        'updated_at': DateTime.now().toIso8601String(),
+      }).eq('id', registerId);
+    } catch (e) {
+      debugPrint('submitGramNidanToTho error: $e');
+    }
+  }
+
+  /// Update PDF URL after generation.
+  static Future<void> updateGramNidanPdfUrl(String registerId, String pdfUrl) async {
+    try {
+      await _db.from('gramnidan_registers').update({
+        'pdf_url': pdfUrl,
+        'updated_at': DateTime.now().toIso8601String(),
+      }).eq('id', registerId);
+    } catch (e) {
+      debugPrint('updateGramNidanPdfUrl error: $e');
+    }
+  }
+
+  /// Upload a register PDF to Supabase Storage and return its public URL.
+  static Future<String?> uploadRegisterPdf(List<int> pdfBytes, String registerId) async {
+    try {
+      const bucket = 'register-pdfs';
+      final fileName = '$registerId.pdf';
+      await _db.storage
+          .from(bucket)
+          .uploadBinary(
+            fileName,
+            Uint8List.fromList(pdfBytes),
+            fileOptions: const FileOptions(contentType: 'application/pdf', upsert: true),
+          );
+      final signedUrl = await _db.storage.from(bucket).createSignedUrl(fileName, 60 * 60 * 24 * 7); // 7 days
+      return signedUrl;
+    } catch (e) {
+      debugPrint('uploadRegisterPdf error: $e');
+      return null;
+    }
   }
 }

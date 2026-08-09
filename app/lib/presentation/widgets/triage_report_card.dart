@@ -7,6 +7,7 @@ class TriageReportCard extends StatelessWidget {
   final String transcript;
   final bool compact;
   final VoidCallback? onMarkReviewed;
+  final VoidCallback? onOpenDoctorSheet;
 
   const TriageReportCard({
     super.key,
@@ -14,6 +15,7 @@ class TriageReportCard extends StatelessWidget {
     required this.transcript,
     this.compact = false,
     this.onMarkReviewed,
+    this.onOpenDoctorSheet,
   });
 
   Color get _riskColor {
@@ -270,6 +272,18 @@ class TriageReportCard extends StatelessWidget {
                         style: FilledButton.styleFrom(
                           backgroundColor: _riskColor,
                         ),
+                      ),
+                    ),
+                  ),
+                if (onOpenDoctorSheet != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 10),
+                    child: SizedBox(
+                      width: double.infinity,
+                      child: OutlinedButton.icon(
+                        onPressed: onOpenDoctorSheet,
+                        icon: const Icon(Icons.assignment_rounded, size: 18),
+                        label: const Text('Create doctor sheet from this analysis'),
                       ),
                     ),
                   ),

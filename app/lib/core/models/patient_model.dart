@@ -11,6 +11,7 @@ class Patient {
   final String? lastMessage;
   final DateTime? lastMessageTime;
   final String? photoUrl;
+  final Map<String, dynamic>? caseDetails;
 
   Patient({
     required this.id,
@@ -23,6 +24,7 @@ class Patient {
     this.lastMessage,
     this.lastMessageTime,
     this.photoUrl,
+    this.caseDetails,
   });
 
   factory Patient.fromMap(Map<String, dynamic> data) {
@@ -43,20 +45,30 @@ class Patient {
               ? data['lastMessageTime']
               : null),
       photoUrl: data['photo_url'] ?? data['photoUrl'],
+      caseDetails: data['case_details'] != null
+          ? Map<String, dynamic>.from(data['case_details'])
+          : null,
     );
   }
 
-  Map<String, dynamic> toMap() => {
-        'name': name,
-        'age': age,
-        'village': village,
-        'register_type': registerType,
-        'asha_id': ashaId,
-        'risk_category': riskCategory,
-        'last_message': lastMessage,
-        'last_message_time': lastMessageTime?.toIso8601String(),
-        'photo_url': photoUrl,
-      };
+  Map<String, dynamic> toMap() {
+    final map = <String, dynamic>{
+      'name': name,
+      'age': age,
+      'village': village,
+      'register_type': registerType,
+      'asha_id': ashaId,
+      'risk_category': riskCategory,
+      'last_message': lastMessage,
+      'last_message_time': lastMessageTime?.toIso8601String(),
+      'photo_url': photoUrl,
+    };
+    if (caseDetails != null) {
+      map['case_details'] = caseDetails;
+    }
+    map.removeWhere((key, value) => value == null);
+    return map;
+  }
 }
 
 class TriageReport {
@@ -70,6 +82,7 @@ class TriageReport {
   final TriageResult triageResult;
   final DateTime createdAt;
   final bool reviewedByDoctor;
+  final Map<String, dynamic>? doctorSheet;
 
   TriageReport({
     required this.id,
@@ -82,6 +95,7 @@ class TriageReport {
     required this.triageResult,
     required this.createdAt,
     this.reviewedByDoctor = false,
+    this.doctorSheet,
   });
 
   factory TriageReport.fromMap(Map<String, dynamic> data) {
@@ -99,6 +113,9 @@ class TriageReport {
           ? DateTime.tryParse(data['created_at'].toString()) ?? DateTime.now()
           : DateTime.now(),
       reviewedByDoctor: data['reviewed_by_doctor'] ?? data['reviewedByDoctor'] ?? false,
+      doctorSheet: data['doctor_sheet'] != null
+          ? Map<String, dynamic>.from(data['doctor_sheet'])
+          : null,
     );
   }
 }
