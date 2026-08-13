@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -120,19 +121,66 @@ class FirebaseService {
   }
 
   // ─── Patients ────────────────────────────────────────────────────────────────
+
+  /// Stable patient list stream that does NOT flicker.
+  ///
+  /// Supabase Realtime `.stream().eq()` re-emits the FULL list whenever ANY row
+  /// in the `patients` table changes (even rows owned by other ASHAs), causing
+  /// the UI to flash/reorder constantly. Instead, we:
+  ///   1. Fetch once immediately.
+  ///   2. Listen to Realtime Postgres changes scoped to only `asha_id = ashaId`.
+  ///   3. On any relevant change, refetch — giving us stable, debounced updates.
   static Stream<List<Patient>> watchPatients(String ashaId) {
-    return _db.from('patients').stream(primaryKey: ['id']).map((rows) {
-      final patients = rows
-          .map((row) => Patient.fromMap(Map<String, dynamic>.from(row)))
-          .where((p) => ashaId.isEmpty || p.ashaId == ashaId || p.ashaId.isEmpty)
-          .toList();
-      patients.sort((a, b) {
-        final aTime = a.lastMessageTime ?? DateTime.fromMillisecondsSinceEpoch(0);
-        final bTime = b.lastMessageTime ?? DateTime.fromMillisecondsSinceEpoch(0);
-        return bTime.compareTo(aTime);
-      });
-      return patients;
-    });
+    final controller = StreamController<List<Patient>>.broadcast();
+    List<Patient>? cache;
+
+    Future<void> fetch() async {
+      try {
+        final rows = await _db
+            .from('patients')
+            .select()
+            .eq('asha_id', ashaId)
+            .order('last_message_time', ascending: false, nullsFirst: false);
+        final patients = (rows as List)
+            .map((row) => Patient.fromMap(Map<String, dynamic>.from(row)))
+            .toList();
+        // Only emit if the data actually changed (avoid pointless rebuilds)
+        if (cache == null || patients.length != cache!.length ||
+            !List.generate(patients.length, (i) => patients[i].id)
+                .every((id) => cache!.any((p) => p.id == id))) {
+          cache = patients;
+          if (!controller.isClosed) controller.add(patients);
+        }
+      } catch (e) {
+        debugPrint('watchPatients fetch error: $e');
+      }
+    }
+
+    // Initial fetch
+    fetch();
+
+    // Subscribe to Realtime changes scoped to this ASHA's rows only
+    final channel = _db
+        .channel('patients_asha_$ashaId')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.all,
+          schema: 'public',
+          table: 'patients',
+          filter: PostgresChangeFilter(
+            type: PostgresChangeFilterType.eq,
+            column: 'asha_id',
+            value: ashaId,
+          ),
+          callback: (_) => fetch(),
+        )
+        .subscribe();
+
+    controller.onCancel = () {
+      _db.removeChannel(channel);
+      controller.close();
+    };
+
+    return controller.stream;
   }
 
   static Future<Patient?> getPatient(String patientId) async {
@@ -246,6 +294,8 @@ class FirebaseService {
   }
 
   // ─── Triage Reports ──────────────────────────────────────────────────────────
+
+  /// Global triage report stream (for fallback/admin use).
   static Stream<List<TriageReport>> watchTriageReports() {
     return _db
         .from('triage_reports')
@@ -254,6 +304,68 @@ class FirebaseService {
         .map((rows) => rows
             .map((row) => TriageReport.fromMap(Map<String, dynamic>.from(row)))
             .toList());
+  }
+
+  /// Scoped triage reports for a doctor — only fetches rows matching this
+  /// doctor's ASHA scope. Prevents the 0-count race on login by only emitting
+  /// once we have a real ashaIds set, and by using a stable fetch+Realtime
+  /// approach instead of a global stream filtered clientside.
+  static Stream<List<TriageReport>> watchTriageReportsForAshas(
+      Set<String> ashaIds) {
+    if (ashaIds.isEmpty) {
+      // Return a stream that emits an empty list immediately (no flicker)
+      return Stream.value([]);
+    }
+
+    final controller = StreamController<List<TriageReport>>.broadcast();
+    List<String>? cachedIds;
+
+    Future<void> fetch() async {
+      try {
+        final rows = await _db
+            .from('triage_reports')
+            .select()
+            .inFilter('asha_id', ashaIds.toList())
+            .order('created_at', ascending: false);
+        final reports = (rows as List)
+            .map((row) => TriageReport.fromMap(Map<String, dynamic>.from(row)))
+            .toList();
+        final ids = reports.map((r) => r.id).toList();
+        if (cachedIds == null || ids.length != cachedIds!.length ||
+            !ids.every((id) => cachedIds!.contains(id))) {
+          cachedIds = ids;
+          if (!controller.isClosed) controller.add(reports);
+        }
+      } catch (e) {
+        debugPrint('watchTriageReportsForAshas fetch error: $e');
+      }
+    }
+
+    fetch();
+
+    final channel = _db
+        .channel('triage_reports_doctor')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.all,
+          schema: 'public',
+          table: 'triage_reports',
+          callback: (payload) {
+            // Only re-fetch if the changed row belongs to our scoped ASHAs
+            final ashaId = payload.newRecord['asha_id'] as String? ??
+                payload.oldRecord['asha_id'] as String?;
+            if (ashaId == null || ashaIds.contains(ashaId)) {
+              fetch();
+            }
+          },
+        )
+        .subscribe();
+
+    controller.onCancel = () {
+      _db.removeChannel(channel);
+      controller.close();
+    };
+
+    return controller.stream;
   }
 
   static Stream<List<TriageReport>> watchTriageReportsForPatient(String patientId) {

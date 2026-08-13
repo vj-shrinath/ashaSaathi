@@ -15,7 +15,7 @@ class DoctorDashboardScreen extends StatefulWidget {
 
 class _DoctorDashboardScreenState extends State<DoctorDashboardScreen>
     with SingleTickerProviderStateMixin {
-  _DashboardFilter _selectedFilter = _DashboardFilter.allPatients;
+  _DashboardFilter _selectedFilter = _DashboardFilter.urgent;
   bool _loadingScope = true;
   Set<String> _scopedAshaIds = {};
   String? _doctorId;
@@ -23,12 +23,10 @@ class _DoctorDashboardScreenState extends State<DoctorDashboardScreen>
   String? _phcName;
   final TextEditingController _searchController = TextEditingController();
   String _searchQuery = '';
-  late final Stream<List<TriageReport>> _triageStream;
 
   @override
   void initState() {
     super.initState();
-    _triageStream = FirebaseService.watchTriageReports();
     _loadDoctorScope();
     _searchController.addListener(() {
       setState(() {
@@ -154,147 +152,163 @@ class _DoctorDashboardScreenState extends State<DoctorDashboardScreen>
 
     final theme = Theme.of(context);
 
-    return Scaffold(
-      backgroundColor: const Color(0xFFF8FAFC),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () {
-          context.push('/dashboard/doctor/patients');
-        },
-        icon: const Icon(Icons.add_task_rounded, size: 22),
-        label: const Text(
-          'Prescribe Medication',
-          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15, letterSpacing: 0.2),
-        ),
-        backgroundColor: const Color(0xFF0F4C81),
-        foregroundColor: Colors.white,
-        elevation: 6,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      ),
-      floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
-      body: SafeArea(
-        child: RefreshIndicator(
-          color: const Color(0xFF0F4C81),
-          onRefresh: () async {
-            await _loadDoctorScope();
-            setState(() {});
-          },
-          child: CustomScrollView(
-            physics: const AlwaysScrollableScrollPhysics(parent: BouncingScrollPhysics()),
-            slivers: [
-              // 1. Hero Doctor Header
-              SliverToBoxAdapter(
-                child: _DoctorHeroHeader(
-                  doctorName: _doctorName,
-                  phcName: _phcName,
-                  onRefresh: () {
-                    _loadDoctorScope();
-                    setState(() {});
-                  },
-                  onSignOut: () async {
-                    await Supabase.instance.client.auth.signOut();
-                    if (context.mounted) context.go('/auth/login');
-                  },
-                ),
-              ),
+    // ──────────────────────────────────────────────────────────────────────────────
+    // Single shared StreamBuilder for triage data — both the summary grid
+    // and the patient feed use the same snapshot, so they always stay in sync
+    // and there is no 0→N flicker between them.
+    // ──────────────────────────────────────────────────────────────────────────────
+    return StreamBuilder<List<TriageReport>>(
+      stream: FirebaseService.watchTriageReportsForAshas(_scopedAshaIds),
+      builder: (context, triageSnapshot) {
+        // While first load, show a subtle loading indicator in place of the grid
+        final allReports = triageSnapshot.data ?? [];
+        final isTriageLoading = triageSnapshot.connectionState == ConnectionState.waiting &&
+            allReports.isEmpty;
 
-              // Main Dashboard Body Content
-              SliverPadding(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                sliver: SliverList(
-                  delegate: SliverChildListDelegate([
-                    // 2. Quick Search Bar
-                    _SearchBar(
-                      controller: _searchController,
-                      searchQuery: _searchQuery,
-                      onClear: () {
-                        _searchController.clear();
-                        setState(() => _searchQuery = '');
+        return Scaffold(
+          backgroundColor: const Color(0xFFF8FAFC),
+          floatingActionButton: FloatingActionButton.extended(
+            onPressed: () {
+              context.push('/dashboard/doctor/patients');
+            },
+            icon: const Icon(Icons.add_task_rounded, size: 22),
+            label: const Text(
+              'Prescribe Medication',
+              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15, letterSpacing: 0.2),
+            ),
+            backgroundColor: const Color(0xFF0F4C81),
+            foregroundColor: Colors.white,
+            elevation: 6,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          ),
+          floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
+          body: SafeArea(
+            child: RefreshIndicator(
+              color: const Color(0xFF0F4C81),
+              onRefresh: () async {
+                await _loadDoctorScope();
+                setState(() {});
+              },
+              child: CustomScrollView(
+                physics: const AlwaysScrollableScrollPhysics(parent: BouncingScrollPhysics()),
+                slivers: [
+                  // 1. Hero Doctor Header
+                  SliverToBoxAdapter(
+                    child: _DoctorHeroHeader(
+                      doctorName: _doctorName,
+                      phcName: _phcName,
+                      onRefresh: () {
+                        _loadDoctorScope();
+                        setState(() {});
+                      },
+                      onSignOut: () async {
+                        await Supabase.instance.client.auth.signOut();
+                        if (context.mounted) context.go('/auth/login');
                       },
                     ),
+                  ),
 
-                    const SizedBox(height: 16),
+                  // Main Dashboard Body Content
+                  SliverPadding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                    sliver: SliverList(
+                      delegate: SliverChildListDelegate([
+                        // 2. Quick Search Bar
+                        _SearchBar(
+                          controller: _searchController,
+                          searchQuery: _searchQuery,
+                          onClear: () {
+                            _searchController.clear();
+                            setState(() => _searchQuery = '');
+                          },
+                        ),
 
-                    // 3. Triage Risk Summary Grid
-                    _SummaryGrid(
-                      stream: _triageStream,
-                      selectedFilter: _selectedFilter,
-                      onSelected: (filter) => setState(() => _selectedFilter = filter),
-                      myAshaIds: _scopedAshaIds,
-                    ),
+                        const SizedBox(height: 16),
 
-                    const SizedBox(height: 18),
+                        // 3. Triage Risk Summary Grid (uses shared snapshot)
+                        _SummaryGrid(
+                          allReports: allReports,
+                          isLoading: isTriageLoading,
+                          selectedFilter: _selectedFilter,
+                          onSelected: (filter) => setState(() => _selectedFilter = filter),
+                        ),
 
-                    // 4. Horizontal Section Pills / Filters
-                    _SectionPills(
-                      selectedFilter: _selectedFilter,
-                      onSelected: (filter) => setState(() => _selectedFilter = filter),
-                    ),
+                        const SizedBox(height: 18),
 
-                    const SizedBox(height: 18),
+                        // 4. Horizontal Section Pills / Filters
+                        _SectionPills(
+                          selectedFilter: _selectedFilter,
+                          onSelected: (filter) => setState(() => _selectedFilter = filter),
+                        ),
 
-                    // 5. Section Header Title with Badge
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
+                        const SizedBox(height: 18),
+
+                        // 5. Section Header Title with Badge
                         Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: [
-                            Container(
-                              width: 4,
-                              height: 18,
-                              decoration: BoxDecoration(
-                                color: const Color(0xFF0F4C81),
-                                borderRadius: BorderRadius.circular(4),
-                              ),
+                            Row(
+                              children: [
+                                Container(
+                                  width: 4,
+                                  height: 18,
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFF0F4C81),
+                                    borderRadius: BorderRadius.circular(4),
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Text(
+                                  _selectedFilter.title,
+                                  style: theme.textTheme.titleMedium?.copyWith(
+                                    fontWeight: FontWeight.bold,
+                                    color: const Color(0xFF0F172A),
+                                    fontSize: 18,
+                                  ),
+                                ),
+                              ],
                             ),
-                            const SizedBox(width: 8),
-                            Text(
-                              _selectedFilter.title,
-                              style: theme.textTheme.titleMedium?.copyWith(
-                                fontWeight: FontWeight.bold,
-                                color: const Color(0xFF0F172A),
-                                fontSize: 18,
+                            if (_searchQuery.isNotEmpty)
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF0F4C81).withValues(alpha: 0.1),
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: Text(
+                                  'Filter: "$_searchQuery"',
+                                  style: const TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w600,
+                                    color: Color(0xFF0F4C81),
+                                  ),
+                                ),
                               ),
-                            ),
                           ],
                         ),
-                        if (_searchQuery.isNotEmpty)
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                            decoration: BoxDecoration(
-                              color: const Color(0xFF0F4C81).withValues(alpha: 0.1),
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            child: Text(
-                              'Filter: "$_searchQuery"',
-                              style: const TextStyle(
-                                fontSize: 11,
-                                fontWeight: FontWeight.w600,
-                                color: Color(0xFF0F4C81),
-                              ),
-                            ),
-                          ),
-                      ],
+
+                        const SizedBox(height: 12),
+
+                        // 6. Patient Feed (uses shared snapshot — no extra stream)
+                        _PatientFeedPanel(
+                          filter: _selectedFilter,
+                          myAshaIds: _scopedAshaIds,
+                          doctorId: _doctorId,
+                          searchQuery: _searchQuery,
+                          allReports: allReports,
+                          isLoading: isTriageLoading,
+                        ),
+
+                        const SizedBox(height: 80), // Padding for FAB
+                      ]),
                     ),
-
-                    const SizedBox(height: 12),
-
-                    // 6. Patient Feed Content List
-                    _PatientFeedPanel(
-                      stream: _triageStream,
-                      filter: _selectedFilter,
-                      myAshaIds: _scopedAshaIds,
-                      doctorId: _doctorId,
-                      searchQuery: _searchQuery,
-                    ),
-
-                    const SizedBox(height: 80), // Padding for FAB
-                  ]),
-                ),
+                  ),
+                ],
               ),
-            ],
+            ),
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 }
@@ -708,94 +722,88 @@ class _SearchBar extends StatelessWidget {
 // SUMMARY GRID
 // ─────────────────────────────────────────────────────────────────────────────
 class _SummaryGrid extends StatelessWidget {
-  final Stream<List<TriageReport>> stream;
   final _DashboardFilter selectedFilter;
   final ValueChanged<_DashboardFilter> onSelected;
-  final Set<String> myAshaIds;
+  final List<TriageReport> allReports;
+  final bool isLoading;
 
   const _SummaryGrid({
-    required this.stream,
     required this.selectedFilter,
     required this.onSelected,
-    required this.myAshaIds,
+    required this.allReports,
+    this.isLoading = false,
   });
 
   @override
   Widget build(BuildContext context) {
-    return StreamBuilder<List<TriageReport>>(
-      stream: stream,
-      builder: (context, snapshot) {
-        final isLoading = snapshot.connectionState == ConnectionState.waiting && !snapshot.hasData;
-        final rawReports = snapshot.data ?? [];
-        final reports = myAshaIds.isNotEmpty
-            ? rawReports.where((r) => myAshaIds.contains(r.ashaId)).toList()
-            : rawReports;
-        final latestByPatient = <String, TriageReport>{};
-        for (final r in reports) {
-          latestByPatient.putIfAbsent(r.patientId, () => r);
-        }
-        final unique = latestByPatient.values.toList();
-        final red = unique.where((r) => r.triageResult.riskCategory == 'Red').length;
-        final orange = unique.where((r) => r.triageResult.riskCategory == 'Orange').length;
-        final yellow = unique.where((r) => r.triageResult.riskCategory == 'Yellow').length;
-        final green = unique.where((r) => r.triageResult.riskCategory == 'Green').length;
+    if (isLoading) {
+      return SizedBox(
+        height: 160,
+        child: const Center(
+          child: CircularProgressIndicator(color: Color(0xFF0F4C81), strokeWidth: 2),
+        ),
+      );
+    }
 
-        final urgentVal = isLoading ? '...' : '${red + orange}';
-        final monitorVal = isLoading ? '...' : '$yellow';
-        final stableVal = isLoading ? '...' : '$green';
-        final totalVal = isLoading ? '...' : '${unique.length}';
+    final latestByPatient = <String, TriageReport>{};
+    for (final r in allReports) {
+      latestByPatient.putIfAbsent(r.patientId, () => r);
+    }
+    final unique = latestByPatient.values.toList();
+    final red = unique.where((r) => r.triageResult.riskCategory == 'Red').length;
+    final orange = unique.where((r) => r.triageResult.riskCategory == 'Orange').length;
+    final yellow = unique.where((r) => r.triageResult.riskCategory == 'Yellow').length;
+    final green = unique.where((r) => r.triageResult.riskCategory == 'Green').length;
 
-        return GridView.count(
-          crossAxisCount: 2,
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          mainAxisSpacing: 12,
-          crossAxisSpacing: 12,
-          childAspectRatio: 1.4,
-          children: [
-            _StatCard(
-              label: 'Urgent Cases',
-              value: urgentVal,
-              subLabel: '$red Critical • $orange High',
-              color: const Color(0xFFEF4444),
-              bgColor: const Color(0xFFFEF2F2),
-              icon: Icons.error_rounded,
-              selected: selectedFilter == _DashboardFilter.urgent,
-              onTap: () => onSelected(_DashboardFilter.urgent),
-            ),
-            _StatCard(
-              label: 'Needs Monitor',
-              value: monitorVal,
-              subLabel: 'Moderate Risk',
-              color: const Color(0xFFD97706),
-              bgColor: const Color(0xFFFEF3C7),
-              icon: Icons.monitor_heart_rounded,
-              selected: selectedFilter == _DashboardFilter.monitor,
-              onTap: () => onSelected(_DashboardFilter.monitor),
-            ),
-            _StatCard(
-              label: 'Stable Patients',
-              value: stableVal,
-              subLabel: 'Low Risk Queue',
-              color: const Color(0xFF10B981),
-              bgColor: const Color(0xFFECFDF5),
-              icon: Icons.check_circle_rounded,
-              selected: selectedFilter == _DashboardFilter.stable,
-              onTap: () => onSelected(_DashboardFilter.stable),
-            ),
-            _StatCard(
-              label: 'Total Patients',
-              value: totalVal,
-              subLabel: 'All Triage Cases',
-              color: const Color(0xFF0F4C81),
-              bgColor: const Color(0xFFF0F9FF),
-              icon: Icons.groups_rounded,
-              selected: selectedFilter == _DashboardFilter.allPatients,
-              onTap: () => onSelected(_DashboardFilter.allPatients),
-            ),
-          ],
-        );
-      },
+    return GridView.count(
+      crossAxisCount: 2,
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      mainAxisSpacing: 12,
+      crossAxisSpacing: 12,
+      childAspectRatio: 1.4,
+      children: [
+        _StatCard(
+          label: 'Urgent Cases',
+          value: '${red + orange}',
+          subLabel: '$red Critical • $orange High',
+          color: const Color(0xFFEF4444),
+          bgColor: const Color(0xFFFEF2F2),
+          icon: Icons.error_rounded,
+          selected: selectedFilter == _DashboardFilter.urgent,
+          onTap: () => onSelected(_DashboardFilter.urgent),
+        ),
+        _StatCard(
+          label: 'Needs Monitor',
+          value: '$yellow',
+          subLabel: 'Moderate Risk',
+          color: const Color(0xFFD97706),
+          bgColor: const Color(0xFFFEF3C7),
+          icon: Icons.monitor_heart_rounded,
+          selected: selectedFilter == _DashboardFilter.monitor,
+          onTap: () => onSelected(_DashboardFilter.monitor),
+        ),
+        _StatCard(
+          label: 'Stable Patients',
+          value: '$green',
+          subLabel: 'Low Risk Queue',
+          color: const Color(0xFF10B981),
+          bgColor: const Color(0xFFECFDF5),
+          icon: Icons.check_circle_rounded,
+          selected: selectedFilter == _DashboardFilter.stable,
+          onTap: () => onSelected(_DashboardFilter.stable),
+        ),
+        _StatCard(
+          label: 'Total Patients',
+          value: '${unique.length}',
+          subLabel: 'All Triage Cases',
+          color: const Color(0xFF0F4C81),
+          bgColor: const Color(0xFFF0F9FF),
+          icon: Icons.groups_rounded,
+          selected: selectedFilter == _DashboardFilter.allPatients,
+          onTap: () => onSelected(_DashboardFilter.allPatients),
+        ),
+      ],
     );
   }
 }
@@ -988,24 +996,26 @@ class _SectionPills extends StatelessWidget {
 // PATIENT FEED PANEL
 // ─────────────────────────────────────────────────────────────────────────────
 class _PatientFeedPanel extends StatelessWidget {
-  final Stream<List<TriageReport>> stream;
   final _DashboardFilter filter;
   final Set<String> myAshaIds;
   final String? doctorId;
   final String searchQuery;
+  final List<TriageReport> allReports;
+  final bool isLoading;
 
   const _PatientFeedPanel({
-    required this.stream,
     required this.filter,
     required this.myAshaIds,
     required this.doctorId,
     required this.searchQuery,
+    required this.allReports,
+    this.isLoading = false,
   });
 
   @override
   Widget build(BuildContext context) {
     if (filter == _DashboardFilter.pending) {
-      return _PendingReviewTab(stream: stream, myAshaIds: myAshaIds, searchQuery: searchQuery);
+      return _PendingReviewTab(myAshaIds: myAshaIds, searchQuery: searchQuery);
     }
     if (filter == _DashboardFilter.prescriptions) {
       return _PrescriptionsTab(doctorId: doctorId, searchQuery: searchQuery);
@@ -1014,83 +1024,75 @@ class _PatientFeedPanel extends StatelessWidget {
       return _ActivityFeedTab(myAshaIds: myAshaIds, searchQuery: searchQuery);
     }
 
-    return StreamBuilder<List<TriageReport>>(
-      stream: stream,
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting && !snapshot.hasData) {
-          return const Padding(
-            padding: EdgeInsets.all(32),
-            child: Center(child: CircularProgressIndicator(color: Color(0xFF0F4C81))),
-          );
-        }
+    if (isLoading) {
+      return const Padding(
+        padding: EdgeInsets.all(32),
+        child: Center(child: CircularProgressIndicator(color: Color(0xFF0F4C81))),
+      );
+    }
 
-        final rawReports = snapshot.data ?? [];
-        final reports = myAshaIds.isNotEmpty
-            ? rawReports.where((r) => myAshaIds.contains(r.ashaId)).toList()
-            : rawReports;
-        final latestByPatient = <String, TriageReport>{};
-        for (final report in reports) {
-          latestByPatient.putIfAbsent(report.patientId, () => report);
-        }
+    final latestByPatient = <String, TriageReport>{};
+    for (final report in allReports) {
+      latestByPatient.putIfAbsent(report.patientId, () => report);
+    }
 
-        var items = latestByPatient.values.toList();
+    var items = latestByPatient.values.toList();
 
-        // 1. Filter by Dashboard Risk Filter
-        switch (filter) {
-          case _DashboardFilter.urgent:
-            items = items
-                .where((r) =>
-                    r.triageResult.riskCategory == 'Red' ||
-                    r.triageResult.riskCategory == 'Orange')
-                .toList();
-            break;
-          case _DashboardFilter.monitor:
-            items = items.where((r) => r.triageResult.riskCategory == 'Yellow').toList();
-            break;
-          case _DashboardFilter.stable:
-            items = items.where((r) => r.triageResult.riskCategory == 'Green').toList();
-            break;
-          case _DashboardFilter.allPatients:
-          case _DashboardFilter.pending:
-          case _DashboardFilter.prescriptions:
-          case _DashboardFilter.activity:
-            break;
-        }
+    // 1. Filter by Dashboard Risk Filter
+    switch (filter) {
+      case _DashboardFilter.urgent:
+        items = items
+            .where((r) =>
+                r.triageResult.riskCategory == 'Red' ||
+                r.triageResult.riskCategory == 'Orange')
+            .toList();
+        break;
+      case _DashboardFilter.monitor:
+        items = items.where((r) => r.triageResult.riskCategory == 'Yellow').toList();
+        break;
+      case _DashboardFilter.stable:
+        items = items.where((r) => r.triageResult.riskCategory == 'Green').toList();
+        break;
+      case _DashboardFilter.allPatients:
+      case _DashboardFilter.pending:
+      case _DashboardFilter.prescriptions:
+      case _DashboardFilter.activity:
+        break;
+    }
 
-        // 2. Filter by Search Query
-        if (searchQuery.isNotEmpty) {
-          items = items.where((r) {
-            final patientMatch = r.patientName.toLowerCase().contains(searchQuery);
-            final ashaMatch = r.ashaName.toLowerCase().contains(searchQuery);
-            final summaryMatch = r.triageResult.patientSummary.toLowerCase().contains(searchQuery);
-            final symptomsMatch = r.triageResult.symptoms
-                .any((s) => s.toLowerCase().contains(searchQuery));
-            return patientMatch || ashaMatch || summaryMatch || symptomsMatch;
-          }).toList();
-        }
+    // 2. Filter by Search Query
+    if (searchQuery.isNotEmpty) {
+      items = items.where((r) {
+        final patientMatch = r.patientName.toLowerCase().contains(searchQuery);
+        final ashaMatch = r.ashaName.toLowerCase().contains(searchQuery);
+        final summaryMatch = r.triageResult.patientSummary.toLowerCase().contains(searchQuery);
+        final symptomsMatch = r.triageResult.symptoms
+            .any((s) => s.toLowerCase().contains(searchQuery));
+        return patientMatch || ashaMatch || summaryMatch || symptomsMatch;
+      }).toList();
+    }
 
-        items.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    items.sort((a, b) => b.createdAt.compareTo(a.createdAt));
 
-        if (items.isEmpty) {
-          return _EmptyState(
-            icon: Icons.search_off_rounded,
-            title: searchQuery.isNotEmpty ? 'No Matching Patients' : 'No Patients Found',
-            subtitle: searchQuery.isNotEmpty
-                ? 'No patient matches "$searchQuery". Try clearing search.'
-                : 'No patients in this category yet.',
-          );
-        }
+    if (items.isEmpty) {
+      return _EmptyState(
+        icon: Icons.search_off_rounded,
+        title: searchQuery.isNotEmpty ? 'No Matching Patients' : 'No Patients Found',
+        subtitle: searchQuery.isNotEmpty
+            ? 'No patient matches "$searchQuery". Try clearing search.'
+            : 'No patients in this category yet.',
+      );
+    }
 
-        return ListView.builder(
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          itemCount: items.length,
-          itemBuilder: (context, index) => _PatientTriageTile(report: items[index]),
-        );
-      },
+    return ListView.builder(
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      itemCount: items.length,
+      itemBuilder: (context, index) => _PatientTriageTile(report: items[index]),
     );
   }
 }
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PATIENT TRIAGE TILE
@@ -1452,12 +1454,10 @@ class _PatientTriageTile extends StatelessWidget {
 // PENDING REVIEW TAB
 // ─────────────────────────────────────────────────────────────────────────────
 class _PendingReviewTab extends StatelessWidget {
-  final Stream<List<TriageReport>> stream;
   final Set<String> myAshaIds;
   final String searchQuery;
 
   const _PendingReviewTab({
-    required this.stream,
     required this.myAshaIds,
     required this.searchQuery,
   });
@@ -1465,9 +1465,9 @@ class _PendingReviewTab extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<List<TriageReport>>(
-      stream: stream,
+      stream: FirebaseService.watchTriageReports(),
       builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting && !snapshot.hasData) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
           return const Padding(
             padding: EdgeInsets.all(32),
             child: Center(child: CircularProgressIndicator(color: Color(0xFF0F4C81))),
@@ -1475,9 +1475,7 @@ class _PendingReviewTab extends StatelessWidget {
         }
 
         final rawReports = snapshot.data ?? [];
-        final reports = myAshaIds.isNotEmpty
-            ? rawReports.where((r) => myAshaIds.contains(r.ashaId)).toList()
-            : rawReports;
+        final reports = rawReports.where((r) => myAshaIds.contains(r.ashaId)).toList();
         var pending = reports.where((r) => !r.reviewedByDoctor).toList();
 
         if (searchQuery.isNotEmpty) {
