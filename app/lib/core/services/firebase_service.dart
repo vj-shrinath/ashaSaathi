@@ -121,13 +121,10 @@ class FirebaseService {
 
   // ─── Patients ────────────────────────────────────────────────────────────────
   static Stream<List<Patient>> watchPatients(String ashaId) {
-    return _db
-        .from('patients')
-        .stream(primaryKey: ['id'])
-        .eq('asha_id', ashaId)
-        .map((rows) {
+    return _db.from('patients').stream(primaryKey: ['id']).map((rows) {
       final patients = rows
           .map((row) => Patient.fromMap(Map<String, dynamic>.from(row)))
+          .where((p) => ashaId.isEmpty || p.ashaId == ashaId || p.ashaId.isEmpty)
           .toList();
       patients.sort((a, b) {
         final aTime = a.lastMessageTime ?? DateTime.fromMillisecondsSinceEpoch(0);

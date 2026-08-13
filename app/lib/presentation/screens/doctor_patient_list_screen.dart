@@ -149,12 +149,14 @@ class _PatientListTab extends StatelessWidget {
     return StreamBuilder<List<TriageReport>>(
       stream: FirebaseService.watchTriageReports(),
       builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
+        if (snapshot.connectionState == ConnectionState.waiting && !snapshot.hasData) {
           return const Center(child: CircularProgressIndicator());
         }
 
         final rawReports = snapshot.data ?? [];
-        final reports = rawReports.where((r) => ashaIds.contains(r.ashaId)).toList();
+        final reports = ashaIds.isNotEmpty
+            ? rawReports.where((r) => ashaIds.contains(r.ashaId)).toList()
+            : rawReports;
         final latestByPatient = <String, TriageReport>{};
         for (final report in reports) {
           latestByPatient.putIfAbsent(report.patientId, () => report);

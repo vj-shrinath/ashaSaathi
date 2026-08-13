@@ -720,7 +720,9 @@ class _SummaryGrid extends StatelessWidget {
       stream: FirebaseService.watchTriageReports(),
       builder: (context, snapshot) {
         final rawReports = snapshot.data ?? [];
-        final reports = rawReports.where((r) => myAshaIds.contains(r.ashaId)).toList();
+        final reports = myAshaIds.isNotEmpty
+            ? rawReports.where((r) => myAshaIds.contains(r.ashaId)).toList()
+            : rawReports;
         final latestByPatient = <String, TriageReport>{};
         for (final r in reports) {
           latestByPatient.putIfAbsent(r.patientId, () => r);
@@ -1001,7 +1003,7 @@ class _PatientFeedPanel extends StatelessWidget {
     return StreamBuilder<List<TriageReport>>(
       stream: FirebaseService.watchTriageReports(),
       builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
+        if (snapshot.connectionState == ConnectionState.waiting && !snapshot.hasData) {
           return const Padding(
             padding: EdgeInsets.all(32),
             child: Center(child: CircularProgressIndicator(color: Color(0xFF0F4C81))),
@@ -1009,7 +1011,9 @@ class _PatientFeedPanel extends StatelessWidget {
         }
 
         final rawReports = snapshot.data ?? [];
-        final reports = rawReports.where((r) => myAshaIds.contains(r.ashaId)).toList();
+        final reports = myAshaIds.isNotEmpty
+            ? rawReports.where((r) => myAshaIds.contains(r.ashaId)).toList()
+            : rawReports;
         final latestByPatient = <String, TriageReport>{};
         for (final report in reports) {
           latestByPatient.putIfAbsent(report.patientId, () => report);
@@ -1447,7 +1451,7 @@ class _PendingReviewTab extends StatelessWidget {
     return StreamBuilder<List<TriageReport>>(
       stream: FirebaseService.watchTriageReports(),
       builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
+        if (snapshot.connectionState == ConnectionState.waiting && !snapshot.hasData) {
           return const Padding(
             padding: EdgeInsets.all(32),
             child: Center(child: CircularProgressIndicator(color: Color(0xFF0F4C81))),
@@ -1455,7 +1459,9 @@ class _PendingReviewTab extends StatelessWidget {
         }
 
         final rawReports = snapshot.data ?? [];
-        final reports = rawReports.where((r) => myAshaIds.contains(r.ashaId)).toList();
+        final reports = myAshaIds.isNotEmpty
+            ? rawReports.where((r) => myAshaIds.contains(r.ashaId)).toList()
+            : rawReports;
         var pending = reports.where((r) => !r.reviewedByDoctor).toList();
 
         if (searchQuery.isNotEmpty) {

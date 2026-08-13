@@ -221,6 +221,21 @@ class _PatientListTab extends StatefulWidget {
 class _PatientListTabState extends State<_PatientListTab> {
   final TextEditingController _searchController = TextEditingController();
   String _searchQuery = '';
+  late Stream<List<Patient>> _patientsStream;
+
+  @override
+  void initState() {
+    super.initState();
+    _patientsStream = FirebaseService.watchPatients(widget.ashaId);
+  }
+
+  @override
+  void didUpdateWidget(_PatientListTab oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.ashaId != widget.ashaId) {
+      _patientsStream = FirebaseService.watchPatients(widget.ashaId);
+    }
+  }
 
   @override
   void dispose() {
@@ -234,9 +249,9 @@ class _PatientListTabState extends State<_PatientListTab> {
     final isDark = theme.brightness == Brightness.dark;
 
     return StreamBuilder<List<Patient>>(
-      stream: FirebaseService.watchPatients(widget.ashaId),
+      stream: _patientsStream,
       builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
+        if (snapshot.connectionState == ConnectionState.waiting && !snapshot.hasData) {
           return const Center(child: CircularProgressIndicator(color: Color(0xFF00A884)));
         }
 
