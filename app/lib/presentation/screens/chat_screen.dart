@@ -33,6 +33,8 @@ class _ChatScreenState extends State<ChatScreen> {
   Patient? _patient;
   bool _isProcessing = false;
   String? _playingAudioUrl;
+  bool _hasScrolledToBottom = false; // jump once when chat first opens
+  int _prevMessageCount = 0; // track new messages arriving
 
   @override
   void initState() {
@@ -238,13 +240,28 @@ class _ChatScreenState extends State<ChatScreen> {
                   return _buildEmptyState(theme);
                 }
 
-                WidgetsBinding.instance.addPostFrameCallback((_) {
-                  if (_scrollController.hasClients) {
-                    _scrollController.jumpTo(
-                      _scrollController.position.maxScrollExtent,
-                    );
-                  }
-                });
+                // ── Auto-scroll logic ──────────────────────────────────────
+                // ListView is reverse:true → position 0 = newest message (bottom).
+                // Jump instantly on first open; animate smoothly for new messages.
+                final isFirstLoad = !_hasScrolledToBottom;
+                final hasNewMessages = messages.length > _prevMessageCount;
+
+                if ((isFirstLoad || hasNewMessages) && messages.isNotEmpty) {
+                  _prevMessageCount = messages.length;
+                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                    if (!_scrollController.hasClients) return;
+                    if (isFirstLoad) {
+                      _hasScrolledToBottom = true;
+                      _scrollController.jumpTo(0);
+                    } else {
+                      _scrollController.animateTo(
+                        0,
+                        duration: const Duration(milliseconds: 250),
+                        curve: Curves.easeOut,
+                      );
+                    }
+                  });
+                }
 
                   final visibleMessages = messages;
 
