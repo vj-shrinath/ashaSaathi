@@ -395,8 +395,8 @@ router.post('/register-worker', requireAdmin, async (req: Request, res: Response
     return;
   }
 
-  const normalizedEmail = String(email).trim().toLowerCase();
-  const tempPassword = crypto.randomBytes(12).toString('base64url');
+  // Generate an easy, memorable 8-character temporary password (e.g. Asha8294)
+  const tempPassword = 'Asha' + Math.floor(1000 + Math.random() * 9000).toString();
 
   try {
     const { user: existingUser, error: findError } = await findUserByEmail(normalizedEmail);
@@ -482,8 +482,8 @@ router.post('/complete-password-change', async (req: Request, res: Response): Pr
   const token = authHeader.split(' ')[1];
   const { newPassword } = req.body;
 
-  if (!newPassword || String(newPassword).trim().length < 8) {
-    res.status(400).json({ status: 'error', message: 'New password must be at least 8 characters' });
+  if (!newPassword || String(newPassword).trim().length < 6) {
+    res.status(400).json({ status: 'error', message: 'New password must be at least 6 characters' });
     return;
   }
 

@@ -512,11 +512,11 @@ class FirebaseService {
       final id = register.id.isNotEmpty ? register.id : _uuid.v4();
       final payload = register.toMap();
       payload['id'] = id;
-      await _db.from('gramnidan_registers').insert(payload);
+      await _db.from('gramnidan_registers').insert(payload).timeout(const Duration(seconds: 15));
       return id;
     } catch (e) {
       debugPrint('saveGramNidanRegister error: $e');
-      return register.id.isNotEmpty ? register.id : _uuid.v4();
+      throw Exception('Failed to save register: $e');
     }
   }
 
@@ -532,26 +532,47 @@ class FirebaseService {
             .toList());
   }
 
-  /// Stream ALL registers submitted to THO (for the THO dashboard).
-  static Stream<List<GramNidanRegister>> watchThoInbox() {
-    return _db
-        .from('gramnidan_registers')
-        .stream(primaryKey: ['id'])
-        .eq('submitted_to_tho', true)
+  /// Stream registers for the THO dashboard (filter options: 'all', 'submitted', 'flagged').
+  static Stream<List<GramNidanRegister>> watchThoInbox({String filter = 'all'}) {
+    final query = _db.from('gramnidan_registers').stream(primaryKey: ['id']);
+    if (filter == 'submitted') {
+      return query
+          .eq('submitted_to_tho', true)
+          .order('created_at', ascending: false)
+          .map((rows) => rows
+              .map((row) => GramNidanRegister.fromMap(Map<String, dynamic>.from(row)))
+              .toList());
+    } else if (filter == 'flagged') {
+      return query
+          .eq('is_warning', true)
+          .order('created_at', ascending: false)
+          .map((rows) => rows
+              .map((row) => GramNidanRegister.fromMap(Map<String, dynamic>.from(row)))
+              .toList());
+    }
+    return query
         .order('created_at', ascending: false)
         .map((rows) => rows
             .map((row) => GramNidanRegister.fromMap(Map<String, dynamic>.from(row)))
             .toList());
   }
 
-  /// Mark a register as submitted to THO and optionally save the PDF URL.
-  static Future<void> submitGramNidanToTho(String registerId, {String? pdfUrl}) async {
+  /// Mark a register as submitted to THO and optionally save the PDF URL & updated moduleData.
+  static Future<void> submitGramNidanToTho(
+    String registerId, {
+    String? pdfUrl,
+    Map<String, Map<String, String>>? moduleData,
+  }) async {
     try {
-      await _db.from('gramnidan_registers').update({
+      final payload = <String, dynamic>{
         'submitted_to_tho': true,
         'pdf_url': pdfUrl,
         'updated_at': DateTime.now().toIso8601String(),
-      }).eq('id', registerId);
+      };
+      if (moduleData != null) {
+        payload['module_data'] = moduleData;
+      }
+      await _db.from('gramnidan_registers').update(payload).eq('id', registerId);
     } catch (e) {
       debugPrint('submitGramNidanToTho error: $e');
     }

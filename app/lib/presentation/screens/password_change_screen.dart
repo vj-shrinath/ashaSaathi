@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../core/services/backend_api_service.dart';
+import '../widgets/app_error_banner.dart';
 
 class PasswordChangeScreen extends StatefulWidget {
   const PasswordChangeScreen({super.key});
@@ -167,15 +168,7 @@ class _PasswordChangeScreenState extends State<PasswordChangeScreen> {
                         ),
                         const SizedBox(height: 20),
                         if (_error != null) ...[
-                          Container(
-                            padding: const EdgeInsets.all(12),
-                            decoration: BoxDecoration(
-                              color: Colors.red.withValues(alpha: 0.08),
-                              borderRadius: BorderRadius.circular(12),
-                              border: Border.all(color: Colors.red.withValues(alpha: 0.2)),
-                            ),
-                            child: Text(_error!, style: TextStyle(color: Colors.red[700])),
-                          ),
+                          AppErrorBanner(errorText: _error!),
                           const SizedBox(height: 16),
                         ],
                         _isSaving

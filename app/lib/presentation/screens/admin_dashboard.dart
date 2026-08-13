@@ -4,6 +4,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../core/models/activity_log.dart';
 import '../../core/services/firebase_service.dart';
 import '../../core/services/backend_api_service.dart';
+import '../widgets/app_error_banner.dart';
 
 class AdminDashboardScreen extends StatefulWidget {
   const AdminDashboardScreen({super.key});
@@ -504,7 +505,7 @@ class _PhcSetupTabState extends State<_PhcSetupTab> {
                   ),
                   const SizedBox(height: 16),
                   if (_error != null) ...[
-                    Text(_error!, style: const TextStyle(color: Colors.red)),
+                    AppErrorBanner(errorText: _error!),
                     const SizedBox(height: 12),
                   ],
                   _isSaving
@@ -852,7 +853,7 @@ class _PhcAdminSetupTabState extends State<_PhcAdminSetupTab> {
                     ),
                     const SizedBox(height: 16),
                     if (_error != null) ...[
-                      Text(_error!, style: const TextStyle(color: Colors.red)),
+                      AppErrorBanner(errorText: _error!),
                       const SizedBox(height: 12),
                     ],
                     _isSaving
@@ -1087,7 +1088,7 @@ class _WorkerManagementTabState extends State<_WorkerManagementTab> {
                 ],
                 const SizedBox(height: 16),
                 if (_error != null) ...[
-                  Text(_error!, style: const TextStyle(color: Colors.red)),
+                  AppErrorBanner(errorText: _error!),
                   const SizedBox(height: 12),
                 ],
                 _saving
@@ -1107,7 +1108,9 @@ class _WorkerManagementTabState extends State<_WorkerManagementTab> {
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: Text(
-                    'Account ready\nEmail: ${_emailController.text.trim().isEmpty ? 'Use the email entered' : _emailController.text.trim()}\nTemporary password: ${_created!['temp_password'] ?? 'Not returned'}\nThe user must change this password after first login.',
+                    _created!['existed'] == true
+                        ? '✅ Account successfully RESET\nEmail: ${_emailController.text.trim()}\nNew Temporary PIN: ${_created!['temp_password'] ?? ''}\nThe user must change this PIN after first login.'
+                        : '✅ New account CREATED\nEmail: ${_emailController.text.trim()}\nTemporary PIN: ${_created!['temp_password'] ?? ''}\nThe user must change this PIN after first login.',
                     style: const TextStyle(fontWeight: FontWeight.w600),
                   ),
                 ),

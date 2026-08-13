@@ -186,24 +186,35 @@ class _DoctorSheetScreenState extends State<DoctorSheetScreen> {
   }
 
   Future<Uint8List> _buildPdf() async {
-    final doc = pw.Document();
-    final rows = _values.entries.where((e) => e.value.trim().isNotEmpty).map((e) => [e.key, e.value]).toList();
+    pw.ThemeData theme;
+    try {
+      final font = await PdfGoogleFonts.notoSansDevanagariRegular();
+      final boldFont = await PdfGoogleFonts.notoSansDevanagariBold();
+      theme = pw.ThemeData.withFont(base: font, bold: boldFont);
+    } catch (_) {
+      theme = pw.ThemeData.base();
+    }
+
+    final doc = pw.Document(theme: theme);
+    String clean(String s) => s.replaceAll('—', '-').replaceAll('–', '-').replaceAll('·', '-').replaceAll('⚠️', '[WARN]').trim();
+
+    final rows = _values.entries.where((e) => e.value.trim().isNotEmpty).map((e) => [clean(e.key), clean(e.value)]).toList();
     doc.addPage(pw.MultiPage(
       pageFormat: PdfPageFormat.a4,
       margin: const pw.EdgeInsets.all(24),
       build: (_) => [
         pw.Container(color: PdfColor.fromHex('#075E54'), padding: const pw.EdgeInsets.all(14), child: pw.Column(crossAxisAlignment: pw.CrossAxisAlignment.start, children: [
           pw.Text('ASHA Saathi AI', style: pw.TextStyle(color: PdfColors.white, fontSize: 18, fontWeight: pw.FontWeight.bold)),
-          pw.Text('Vitholi PHC — OPD Patient Register / Doctor Sheet', style: const pw.TextStyle(color: PdfColors.white, fontSize: 10)),
-          pw.SizedBox(height: 4), pw.Text(_get('AI Risk Level'), style: const pw.TextStyle(color: PdfColors.white, fontSize: 10)),
+          pw.Text('Vitholi PHC - OPD Patient Register / Doctor Sheet', style: const pw.TextStyle(color: PdfColors.white, fontSize: 10)),
+          pw.SizedBox(height: 4), pw.Text(clean(_get('AI Risk Level')), style: const pw.TextStyle(color: PdfColors.white, fontSize: 10)),
         ])),
         pw.SizedBox(height: 12),
-        _pdfSection('PART A–C · Registration, patient details and schemes', rows.where((r) => ['OPD Serial No.', 'Date', 'Visit Type', 'Time', 'Full Name', 'Age', 'Gender', 'Address / Village', 'Taluka', 'District', 'ASHA Worker', 'Ayushman Bharat', 'MJPJAY', 'JSY', 'RCH / Mother-Child ID', 'HMIS Patient ID'].contains(r[0])).toList()),
-        _pdfSection('PART D–H · AI complaint, vitals, child health and risk', rows.where((r) => r[0] == 'Chief Complaint' || r[0] == 'Duration' || r[0] == 'Case Category' || r[0].toString().startsWith('Vital:') || r[0] == 'Child Age' || r[0] == 'Birth Weight' || r[0] == 'Current Weight' || r[0] == 'Birth Type' || r[0] == 'Breastfeeding' || r[0] == 'HBNC Visit No.' || r[0] == 'AI Risk Level' || r[0] == 'NHM Protocol Applied' || r[0] == 'AI Recommended Action').toList()),
-        _pdfSection('PART I–M · Examination, investigations, treatment, referral and follow-up', rows.where((r) => !['OPD Serial No.', 'Date', 'Visit Type', 'Time', 'Full Name', 'Age', 'Gender', 'Address / Village', 'Taluka', 'District', 'ASHA Worker', 'Ayushman Bharat', 'MJPJAY', 'JSY', 'RCH / Mother-Child ID', 'HMIS Patient ID', 'Chief Complaint', 'Duration', 'Case Category', 'AI Risk Level', 'NHM Protocol Applied', 'AI Recommended Action'].contains(r[0]) && !r[0].toString().startsWith('Vital:') && !['Child Age', 'Birth Weight', 'Current Weight', 'Birth Type', 'Breastfeeding', 'HBNC Visit No.'].contains(r[0])).toList()),
+        _pdfSection('PART A-C - Registration, patient details and schemes', rows.where((r) => ['OPD Serial No.', 'Date', 'Visit Type', 'Time', 'Full Name', 'Age', 'Gender', 'Address / Village', 'Taluka', 'District', 'ASHA Worker', 'Ayushman Bharat', 'MJPJAY', 'JSY', 'RCH / Mother-Child ID', 'HMIS Patient ID'].contains(r[0])).toList()),
+        _pdfSection('PART D-H - AI complaint, vitals, child health and risk', rows.where((r) => r[0] == 'Chief Complaint' || r[0] == 'Duration' || r[0] == 'Case Category' || r[0].toString().startsWith('Vital:') || r[0] == 'Child Age' || r[0] == 'Birth Weight' || r[0] == 'Current Weight' || r[0] == 'Birth Type' || r[0] == 'Breastfeeding' || r[0] == 'HBNC Visit No.' || r[0] == 'AI Risk Level' || r[0] == 'NHM Protocol Applied' || r[0] == 'AI Recommended Action').toList()),
+        _pdfSection('PART I-M - Examination, investigations, treatment, referral and follow-up', rows.where((r) => !['OPD Serial No.', 'Date', 'Visit Type', 'Time', 'Full Name', 'Age', 'Gender', 'Address / Village', 'Taluka', 'District', 'ASHA Worker', 'Ayushman Bharat', 'MJPJAY', 'JSY', 'RCH / Mother-Child ID', 'HMIS Patient ID', 'Chief Complaint', 'Duration', 'Case Category', 'AI Risk Level', 'NHM Protocol Applied', 'AI Recommended Action'].contains(r[0]) && !r[0].toString().startsWith('Vital:') && !['Child Age', 'Birth Weight', 'Current Weight', 'Birth Type', 'Breastfeeding', 'HBNC Visit No.'].contains(r[0])).toList()),
         pw.SizedBox(height: 12),
         pw.Text('Original ASHA voice transcript', style: pw.TextStyle(fontSize: 12, fontWeight: pw.FontWeight.bold)),
-        pw.Text(_sheet?.transcript ?? '', style: const pw.TextStyle(fontSize: 9)),
+        pw.Text(clean(_sheet?.transcript ?? ''), style: const pw.TextStyle(fontSize: 9)),
         pw.SizedBox(height: 20), pw.Text('Doctor signature: ____________________    ASHA signature: ____________________'),
       ],
     ));

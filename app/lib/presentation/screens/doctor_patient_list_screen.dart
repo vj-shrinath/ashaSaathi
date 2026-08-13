@@ -14,8 +14,6 @@ class DoctorPatientListScreen extends StatefulWidget {
 class _DoctorPatientListScreenState extends State<DoctorPatientListScreen>
     with SingleTickerProviderStateMixin {
   late TabController _tabController;
-  String? _doctorId;
-  String? _phcId;
   Set<String> _scopedAshaIds = {};
   bool _isLoading = true;
 
@@ -33,7 +31,6 @@ class _DoctorPatientListScreenState extends State<DoctorPatientListScreen>
         if (mounted) setState(() => _isLoading = false);
         return;
       }
-      _doctorId = user.id;
 
       final docProfile = await Supabase.instance.client
           .from('user_profiles')
@@ -42,7 +39,6 @@ class _DoctorPatientListScreenState extends State<DoctorPatientListScreen>
           .maybeSingle();
 
       final phcId = docProfile != null ? docProfile['phc_id'] as String? : null;
-      _phcId = phcId;
 
       final Set<String> ashaSet = {};
 

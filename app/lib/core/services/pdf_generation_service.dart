@@ -1,12 +1,75 @@
 import 'dart:typed_data';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
+import 'package:printing/printing.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/gramnidan_register.dart';
 import '../../presentation/screens/gramnidan_module_definitions.dart';
 
 class PdfGenerationService {
-  static Future<Uint8List> generateRegisterPdf(GramNidanRegister register) async {
-    final pdf = pw.Document();
+  /// Clean text so standard Helvetica PDF fonts don't break on unhandled emojis or non-ASCII characters
+  static String _cleanText(String text) {
+    if (text.isEmpty) return '';
+    return text
+        .replaceAll('—', '-')
+        .replaceAll('–', '-')
+        .replaceAll('⚠️', '[WARN]')
+        .replaceAll('❌', '[NO]')
+        .replaceAll('✅', '[YES]')
+        .replaceAll('✓', '[OK]')
+        .replaceAll('📑', '')
+        .replaceAll('📄', '')
+        .replaceAll('📲', '')
+        .replaceAll('💾', '')
+        .replaceAll('🦟', '')
+        .replaceAll('🩸', '')
+        .replaceAll('🫁', '')
+        .replaceAll('🖐️', '')
+        .replaceAll('🤢', '')
+        .replaceAll('🤰', '')
+        .replaceAll('👶', '')
+        .replaceAll('🧒', '')
+        .replaceAll('🏘️', '')
+        .replaceAll('❤️', '')
+        .replaceAll('🩺', '')
+        .replaceAll('📊', '')
+        .replaceAll('📋', '')
+        .replaceAll('🍼', '')
+        .replaceAll('🏠', '')
+        .replaceAll('👪', '')
+        .replaceAll('💰', '')
+        .trim();
+  }
+
+  static Future<pw.ThemeData> _getPdfTheme() async {
+    try {
+      final baseFont = await PdfGoogleFonts.notoSansDevanagariRegular();
+      final boldFont = await PdfGoogleFonts.notoSansDevanagariBold();
+      return pw.ThemeData.withFont(
+        base: baseFont,
+        bold: boldFont,
+      );
+    } catch (_) {
+      return pw.ThemeData.base();
+    }
+  }
+
+  static Future<Uint8List> generateRegisterPdf(
+    GramNidanRegister register, {
+    String? ashaName,
+  }) async {
+    final theme = await _getPdfTheme();
+    final pdf = pw.Document(theme: theme);
+
+    final currentUser = Supabase.instance.client.auth.currentUser;
+    final resolvedAshaName = (ashaName != null && ashaName.isNotEmpty)
+        ? ashaName
+        : (currentUser?.userMetadata?['full_name'] as String? ??
+            currentUser?.userMetadata?['name'] as String? ??
+            'ASHA Worker');
+    final resolvedAshaId = register.ashaId.isNotEmpty
+        ? register.ashaId
+        : (currentUser?.id ?? '');
 
     // Map module definitions for easy lookup
     final Map<String, GramNidanModuleDef> moduleDefs = {};
@@ -16,6 +79,7 @@ class PdfGenerationService {
 
     pdf.addPage(
       pw.MultiPage(
+        maxPages: 100,
         pageFormat: PdfPageFormat.a4,
         margin: const pw.EdgeInsets.all(32),
         header: (pw.Context context) {
@@ -33,7 +97,10 @@ class PdfGenerationService {
                   children: [
                     pw.Text('GramNidan Health Register', style: pw.TextStyle(fontSize: 20, fontWeight: pw.FontWeight.bold, color: PdfColor.fromHex('#075E54'))),
                     pw.SizedBox(height: 4),
-                    pw.Text('ASHA ID: ${register.ashaId}', style: const pw.TextStyle(fontSize: 10, color: PdfColors.grey600)),
+                    pw.Text(
+                      'ASHA: ${_cleanText(resolvedAshaName)}${resolvedAshaId.isNotEmpty ? ' | ID: ${_cleanText(resolvedAshaId)}' : ''}',
+                      style: const pw.TextStyle(fontSize: 10, color: PdfColors.grey600),
+                    ),
                   ],
                 ),
                 pw.Column(
@@ -61,15 +128,15 @@ class PdfGenerationService {
               child: pw.Row(
                 children: [
                   pw.Text('Subject: ', style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 14)),
-                  pw.Text(register.patientName, style: const pw.TextStyle(fontSize: 14)),
+                  pw.Text(_cleanText(register.patientName), style: const pw.TextStyle(fontSize: 14)),
                   pw.Spacer(),
                   pw.Text('Type: ', style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 14)),
-                  pw.Text(register.displayName, style: const pw.TextStyle(fontSize: 14)),
+                  pw.Text(_cleanText(register.displayName), style: const pw.TextStyle(fontSize: 14)),
                 ],
               ),
             ),
           );
-          content.add(pw.SizedBox(height: 20));
+          content.add(pw.SizedBox(height: 16));
 
           // Modules
           for (var entry in register.moduleData.entries) {
@@ -79,69 +146,63 @@ class PdfGenerationService {
 
             if (def == null) continue;
 
+            // Module Title Banner (Standalone top-level widget)
             content.add(
               pw.Container(
-                margin: const pw.EdgeInsets.only(bottom: 8),
+                width: double.infinity,
+                padding: const pw.EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                 decoration: pw.BoxDecoration(
-                  border: pw.Border.all(color: PdfColors.grey400),
+                  color: PdfColor.fromHex('#075E54'),
                   borderRadius: const pw.BorderRadius.all(pw.Radius.circular(4)),
                 ),
-                child: pw.Column(
-                  crossAxisAlignment: pw.CrossAxisAlignment.start,
-                  children: [
-                    // Module Header
-                    pw.Container(
-                      width: double.infinity,
-                      padding: const pw.EdgeInsets.all(8),
-                      decoration: pw.BoxDecoration(
-                        color: PdfColor.fromHex('#075E54'),
-                      ),
-                      child: pw.Text('${def.icon} ${def.title}', style: pw.TextStyle(color: PdfColors.white, fontWeight: pw.FontWeight.bold)),
-                    ),
-                    // Fields
-                    pw.Padding(
-                      padding: const pw.EdgeInsets.all(12),
-                      child: pw.Table(
-                        columnWidths: {
-                          0: const pw.FlexColumnWidth(1),
-                          1: const pw.FlexColumnWidth(2),
-                        },
-                        border: pw.TableBorder.all(color: PdfColors.grey300, width: 0.5),
-                        children: def.fields.map((fieldDef) {
-                          final value = fieldsMap[fieldDef.id] ?? '-';
-                          final isWarning = value.contains('⚠️');
-                          return pw.TableRow(
-                            children: [
-                              pw.Padding(
-                                padding: const pw.EdgeInsets.all(6),
-                                child: pw.Text(fieldDef.label, style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 10)),
-                              ),
-                              pw.Padding(
-                                padding: const pw.EdgeInsets.all(6),
-                                child: pw.Text(
-                                  value,
-                                  style: pw.TextStyle(
-                                    color: isWarning ? PdfColors.red800 : PdfColors.black,
-                                    fontWeight: isWarning ? pw.FontWeight.bold : pw.FontWeight.normal,
-                                    fontSize: 10,
-                                  ),
-                                ),
-                              ),
-                            ],
-                          );
-                        }).toList(),
-                      ),
-                    ),
-                  ],
+                child: pw.Text(
+                  _cleanText(def.title),
+                  style: pw.TextStyle(color: PdfColors.white, fontWeight: pw.FontWeight.bold, fontSize: 12),
                 ),
               ),
             );
-            content.add(pw.SizedBox(height: 10));
+            content.add(pw.SizedBox(height: 6));
+
+            // Module Table (Standalone top-level widget, allows page breaks!)
+            content.add(
+              pw.Table(
+                columnWidths: const {
+                  0: pw.FlexColumnWidth(1),
+                  1: pw.FlexColumnWidth(2),
+                },
+                border: pw.TableBorder.all(color: PdfColors.grey300, width: 0.5),
+                children: def.fields.map((fieldDef) {
+                  final rawValue = fieldsMap[fieldDef.id] ?? '-';
+                  final isWarning = rawValue.contains('⚠️');
+                  final value = _cleanText(rawValue);
+                  return pw.TableRow(
+                    children: [
+                      pw.Padding(
+                        padding: const pw.EdgeInsets.all(6),
+                        child: pw.Text(_cleanText(fieldDef.label), style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 10)),
+                      ),
+                      pw.Padding(
+                        padding: const pw.EdgeInsets.all(6),
+                        child: pw.Text(
+                          value.isEmpty ? '-' : value,
+                          style: pw.TextStyle(
+                            color: isWarning ? PdfColors.red800 : PdfColors.black,
+                            fontWeight: isWarning ? pw.FontWeight.bold : pw.FontWeight.normal,
+                            fontSize: 10,
+                          ),
+                        ),
+                      ),
+                    ],
+                  );
+                }).toList(),
+              ),
+            );
+            content.add(pw.SizedBox(height: 14));
           }
 
           // Transcript
           if (register.transcript != null && register.transcript!.isNotEmpty) {
-            content.add(pw.SizedBox(height: 20));
+            content.add(pw.SizedBox(height: 10));
             content.add(pw.Text('Voice Recording Transcript', style: pw.TextStyle(fontSize: 12, fontWeight: pw.FontWeight.bold, color: PdfColors.grey700)));
             content.add(pw.SizedBox(height: 4));
             content.add(pw.Container(
@@ -151,11 +212,117 @@ class PdfGenerationService {
                 borderRadius: const pw.BorderRadius.all(pw.Radius.circular(4)),
                 color: PdfColors.grey100,
               ),
-              child: pw.Text('"${register.transcript!}"', style: const pw.TextStyle(fontStyle: pw.FontStyle.italic, fontSize: 10, color: PdfColors.grey800)),
+              child: pw.Text('"${_cleanText(register.transcript!)}"', style: const pw.TextStyle(fontStyle: pw.FontStyle.italic, fontSize: 10, color: PdfColors.grey800)),
             ));
           }
 
           return content;
+        },
+      ),
+    );
+
+    return pdf.save();
+  }
+
+  static Future<Uint8List> generateModulePdf({
+    required GramNidanModuleDef module,
+    required Map<String, String> filledFields,
+    String? ashaName,
+    String? ashaId,
+  }) async {
+    final theme = await _getPdfTheme();
+    final pdf = pw.Document(theme: theme);
+
+    final currentUser = Supabase.instance.client.auth.currentUser;
+    final resolvedAshaName = (ashaName != null && ashaName.isNotEmpty)
+        ? ashaName
+        : (currentUser?.userMetadata?['full_name'] as String? ??
+            currentUser?.userMetadata?['name'] as String? ??
+            'ASHA Worker');
+    final resolvedAshaId = (ashaId != null && ashaId.isNotEmpty)
+        ? ashaId
+        : (currentUser?.id ?? '');
+
+    pdf.addPage(
+      pw.MultiPage(
+        maxPages: 100,
+        pageFormat: PdfPageFormat.a4,
+        margin: const pw.EdgeInsets.all(32),
+        build: (pw.Context context) {
+          return [
+            pw.Container(
+              padding: const pw.EdgeInsets.only(bottom: 10),
+              margin: const pw.EdgeInsets.only(bottom: 16),
+              decoration: const pw.BoxDecoration(
+                border: pw.Border(bottom: pw.BorderSide(color: PdfColors.grey, width: 2)),
+              ),
+              child: pw.Row(
+                mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                children: [
+                  pw.Column(
+                    crossAxisAlignment: pw.CrossAxisAlignment.start,
+                    children: [
+                      pw.Text('GramNidan Health Register', style: pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold, color: PdfColor.fromHex('#075E54'))),
+                      pw.SizedBox(height: 2),
+                      pw.Text(
+                        'ASHA: ${_cleanText(resolvedAshaName)}${resolvedAshaId.isNotEmpty ? ' | ID: ${_cleanText(resolvedAshaId)}' : ''}',
+                        style: const pw.TextStyle(fontSize: 10, color: PdfColors.grey600),
+                      ),
+                    ],
+                  ),
+                  pw.Column(
+                    crossAxisAlignment: pw.CrossAxisAlignment.end,
+                    children: [
+                      pw.Text('Date: ${DateTime.now().toIso8601String().split('T')[0]}', style: const pw.TextStyle(fontSize: 11)),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+
+            pw.Container(
+              width: double.infinity,
+              padding: const pw.EdgeInsets.all(10),
+              decoration: pw.BoxDecoration(
+                color: PdfColor.fromHex('#075E54'),
+                borderRadius: const pw.BorderRadius.all(pw.Radius.circular(6)),
+              ),
+              child: pw.Text(_cleanText(module.title), style: pw.TextStyle(color: PdfColors.white, fontSize: 14, fontWeight: pw.FontWeight.bold)),
+            ),
+            pw.SizedBox(height: 12),
+
+            pw.Table(
+              columnWidths: const {
+                0: pw.FlexColumnWidth(1.2),
+                1: pw.FlexColumnWidth(2),
+              },
+              border: pw.TableBorder.all(color: PdfColors.grey300, width: 0.5),
+              children: module.fields.map((fieldDef) {
+                final rawValue = filledFields[fieldDef.id] ?? '— (fill karo)';
+                final isWarning = rawValue.contains('⚠️');
+                final value = _cleanText(rawValue);
+                return pw.TableRow(
+                  children: [
+                    pw.Padding(
+                      padding: const pw.EdgeInsets.all(8),
+                      child: pw.Text(_cleanText(fieldDef.label), style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 10)),
+                    ),
+                    pw.Padding(
+                      padding: const pw.EdgeInsets.all(8),
+                      child: pw.Text(
+                        value.isEmpty ? '-' : value,
+                        style: pw.TextStyle(
+                          color: isWarning ? PdfColors.red800 : PdfColors.black,
+                          fontWeight: isWarning ? pw.FontWeight.bold : pw.FontWeight.normal,
+                          fontSize: 10,
+                        ),
+                      ),
+                    ),
+                  ],
+                );
+              }).toList(),
+            ),
+          ];
         },
       ),
     );

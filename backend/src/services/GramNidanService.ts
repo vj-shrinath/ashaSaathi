@@ -8,8 +8,8 @@ const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
 const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
 
 // ─── All 12 GramNidan module field specs ─────────────────────────────────────
-// Ported from Demo-9 gramnidanModules array. These are sent to Claude so it
-// knows which field IDs to fill — it only fills fields actually mentioned.
+// Ported from actual ASHA Dev Spec. Cloud LLM will use this schema to selectively 
+// extract spoken values into rigorous IDs.
 export const GRAMNIDAN_MODULES = [
   {
     id: 'village',
@@ -41,56 +41,59 @@ export const GRAMNIDAN_MODULES = [
   },
   {
     id: 'hbnc',
-    title: 'HBNC Register — Home-Based Newborn Care (0-28 days)',
+    title: 'HBNC Register — Home-Based Newborn Care',
     fieldIds: ['namewt','sex','mothername','bcgbirth','opv0','hepbbirth',
       'hbncday1','hbncday3','hbncday7','hbncday14','hbncday21','hbncday28','hbncday42',
       'temp','cord','jaundice','bf','danger','urine','stool','congenital','sncu'],
   },
   {
     id: 'hbyc',
-    title: 'HBYC Register — Home-Based Young Child Care (3-15 months)',
+    title: 'HBYC Register — Home-Based Young Child Care',
     fieldIds: ['nameage','visitmonth','feeding','ifa','muac','milestones',
-      'wt3','wt6','wt9','wt12','wt15','deworming','ors','zinc','referral'],
+      'wt3','wt6','wt9','wt12','wt15','deworming','orszinc'],
   },
   {
     id: 'child',
-    title: 'Child Health + Vaccination Register (HBYC + UIP)',
-    fieldIds: ['nameinfo','dob','village','ashaname','weight','weightstatus','height',
-      'muac','nutritionstatus','diet','breastfeeding','bcg','opv1','opv2','opv3',
-      'dpt1','dpt2','dpt3','mr','dptbooster','opvbooster','vita','deworming','sam','remarks'],
+    title: 'Child Vaccination (UIP)',
+    fieldIds: ['nameinfo','bcg','hepbzero','opvzero','penta1','fipv1','rvv1','pcv1','opv1',
+      'penta2','opv2','rvv2','penta3','opv3','fipv2','rvv3','pcv2',
+      'mr1','je1','pcvbooster','ipv3','dptbooster1','mr2','je2','opvbooster1','dptbooster2',
+      'td10','td16','weightchart','growthbadge'],
   },
   {
     id: 'cbac',
-    title: 'CBAC Register — NCD Screening (30+)',
-    fieldIds: ['nameage','gender','abhaid','mobile','tobacco','alcohol','waist',
-      'familyhistory','activity','ncdrisk','chroniccough','oralulcer','breastlump',
-      'footnumb','cookingfuel','occupation','portaloutput','remarks'],
+    title: 'CBAC (NCD Screening)',
+    fieldIds: ['nameage','gender','abhaid','mobile','habits','waist',
+      'familyhistory','activity','score','cough','oralulcer','breastlump',
+      'footnumb','fueltype','dustexposure'],
   },
   {
     id: 'ncd',
-    title: 'NCD Tracking Register — BP / Sugar (MH Protocol)',
-    fieldIds: ['nameage','gender','village','ashaname','mobile','condition',
-      'bpreading','mhprotocol','medicine','mhstep','compliance','headache',
-      'chestpain','vision','breathlessness','bsl','diabetes','lastphc','nextvisit','refer','remarks'],
-  },
-  {
-    id: 'idsp',
-    title: 'IDSP / Communicable Disease Surveillance',
-    fieldIds: ['hascase','diseases','nikshayid','sputumdate','dotsstatus','nikshaypmy',
-      'nlepid','skinpatchdate','testdate','testoutcome','onsetdate','contacttracing','outbreakflag'],
+    title: 'NCD Tracking Register',
+    fieldIds: ['nameage','gender','abhaid','diagnosis','diagnoseddate','medication',
+      'compliance','cbacfilled','cbacscore','heightcm','weightkg','bmi',
+      'tbcase','randomglucose','oralcancer','cervicalcancer','breastcancer','otherscreening',
+      'suspectdate','suspectcondition','npcdcsremarks','hb','bpsys','bpdia','lastreading','followup',
+      'ccheart','cckidney','cceye','ccfoot','referral'],
   },
   {
     id: 'birthdeath',
     title: 'Birth & Death Register',
-    fieldIds: ['type','personname','dateofbirth','dateofregistration','placeofbirth',
-      'parentnames','dateofdeath','causeofdeath','reportedby','remarks'],
+    fieldIds: ['eventtype','eventdate','placeofevent','personname',
+      'deceasedagegender','cause','deathaudit','certstatus','crsackid'],
   },
   {
-    id: 'claim',
-    title: 'JSY / JSSK Claim Register',
-    fieldIds: ['beneficiaryname','abhaid','mobile','deliverydate','deliveryplace',
-      'jsystatus','amount','paymentdate','remarks'],
+    id: 'idsp',
+    title: 'Communicable Disease (IDSP)',
+    fieldIds: ['diseasetype','patientname','dateofonset','status','testdate'],
   },
+  {
+    id: 'inventory',
+    title: 'Medicine Inventory & Incentives',
+    fieldIds: ['stockors','stockparacetamol','stockifa','stockcondoms','stockpregkit',
+      'kitexpiry','taskcount','claimanc','claimimmun','claimncd','claimother',
+      'claimamount','paymentstatus','pfmsref'],
+  }
 ];
 
 export interface GramNidanFillResult {
@@ -113,7 +116,8 @@ export class GramNidanService {
    */
   static async fillFromTranscript(
     transcript: string,
-    registerType: string
+    registerType: string,
+    language: string = 'hi'
   ): Promise<GramNidanResult> {
     const moduleSpecs = GRAMNIDAN_MODULES.map(m => ({
       id: m.id,
@@ -121,13 +125,15 @@ export class GramNidanService {
       fieldIds: m.fieldIds,
     }));
 
+    const langName = language === 'mr' ? 'Marathi (मराठी)' : language === 'en' ? 'English' : 'Hindi (हिंदी)';
+
     const prompt = `You are GramNidan AI, filling government ASHA health registers for rural Maharashtra, India.
 
-ASHA VOICE NOTE (transcript): "${transcript}"
+ASHA VOICE NOTE (transcript in ${langName}): "${transcript}"
 
-The ASHA was doing a "${registerType}" visit. People often mention cross-cutting health details (BP, danger signs, feeding) that belong to OTHER registers too.
+The ASHA was doing a "${registerType}" visit. Analyze the transcript smartly in ${langName} and extract all mentioned structured health details into the corresponding register fields. People often mention cross-cutting health details (BP, danger signs, feeding) that belong to OTHER registers too.
 
-Below are ALL 12 available register modules with their field IDs. ONLY include a module/field if the voice note actually mentions something relevant to it. Be very selective — most voice notes will touch only 1-3 modules. Do NOT invent data.
+Below are ALL 12 available register modules with their field IDs. ONLY include a module/field if the voice note actually mentions something relevant to it. Be very selective — most voice notes will touch only 1-3 modules. Do NOT invent data. IMPORTANT: Fill the actual data values primarily in English.
 
 MODULES:
 ${moduleSpecs.map(m => `- ${m.id} (${m.title}): [${m.fieldIds.join(', ')}]`).join('\n')}
@@ -158,19 +164,16 @@ If nothing in the transcript is relevant to any module, return: {}`;
 
       const response = result.response;
       let rawText = response.text().trim();
-      // Robustly extract JSON even if model adds fences
       rawText = rawText.replace(/```json|```/g, '').trim();
       const jsonStart = rawText.indexOf('{');
       const jsonEnd = rawText.lastIndexOf('}');
       if (jsonStart === -1 || jsonEnd === -1) {
-        // No modules filled — return empty
         return { transcript, registerType, filledModules: {}, hasWarnings: false };
       }
       rawText = rawText.slice(jsonStart, jsonEnd + 1);
 
       const parsed = JSON.parse(rawText) as Record<string, Record<string, string>>;
 
-      // Detect if any warning values exist
       const hasWarnings = Object.values(parsed).some(fields =>
         Object.values(fields).some(v => typeof v === 'string' && v.includes('⚠️'))
       );
@@ -183,7 +186,6 @@ If nothing in the transcript is relevant to any module, return: {}`;
       };
     } catch (error) {
       console.error('[GramNidan] Gemini fill error:', error);
-      // Return empty rather than throwing — ASHA can fill manually
       return {
         transcript,
         registerType,

@@ -25,11 +25,9 @@ CREATE POLICY "ASHA can insert their own registers" ON public.gramnidan_register
 CREATE POLICY "ASHA can view and update their own registers" ON public.gramnidan_registers
   FOR ALL USING (auth.uid() = asha_id);
 
--- Allow THO (Taluka Health Officer) to view submitted registers
--- Note: Adjust the condition checking 'tho' role depending on your actual user_profiles structure
-CREATE POLICY "THO can view submitted registers" ON public.gramnidan_registers
+-- Allow THO (Taluka Health Officer) to view all block registers
+CREATE POLICY "THO can view all registers" ON public.gramnidan_registers
   FOR SELECT USING (
-    submitted_to_tho = true AND 
     EXISTS (
       SELECT 1 FROM public.user_profiles 
       WHERE user_profiles.id = auth.uid() 

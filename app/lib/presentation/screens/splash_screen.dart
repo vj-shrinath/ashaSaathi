@@ -49,6 +49,7 @@ class _SplashScreenState extends State<SplashScreen>
 
     if (profile == null || profile['is_active'] == false) {
       await Supabase.instance.client.auth.signOut();
+      if (!mounted) return;
       context.go('/auth/login');
       return;
     }

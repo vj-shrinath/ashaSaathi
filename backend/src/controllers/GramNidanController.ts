@@ -25,20 +25,20 @@ export class GramNidanController {
     try {
       const {
         audioUrl,
-        registerType = 'general',
-        visitId,
+        registerType = 'pregnancy',
         patientId,
         patientName = 'Unknown',
         ashaId,
         ashaName = 'ASHA Worker',
+        language = 'hi',
       } = req.body as {
-        audioUrl?: string;
-        registerType?: string;
-        visitId?: string;
+        audioUrl: string;
+        registerType: string;
         patientId?: string;
         patientName?: string;
         ashaId?: string;
         ashaName?: string;
+        language?: string;
       };
 
       if (!audioUrl) {
@@ -50,7 +50,7 @@ export class GramNidanController {
         return;
       }
 
-      console.log(`[GRAMNIDAN] registerType=${registerType}, patient=${patientId ?? 'none'}, asha=${ashaId}`);
+      console.log(`[GRAMNIDAN] registerType=${registerType}, lang=${language}, patient=${patientId ?? 'none'}, asha=${ashaId}`);
 
       // ── Step 1: Download audio ───────────────────────────────────────────────
       const audioResponse = await axios.get<ArrayBuffer>(audioUrl, {
@@ -61,19 +61,44 @@ export class GramNidanController {
       const contentType = (audioResponse.headers['content-type'] as string) || 'audio/m4a';
       console.log(`[GRAMNIDAN] Downloaded audio: ${audioBuffer.length} bytes`);
 
-      // ── Step 2: Sarvam STT ────────────────────────────────────────────────────
-      const transcript = await SarvamService.transcribeAudio(audioBuffer, contentType);
+      // ── Step 2: Sarvam STT (Hindi / Marathi / English) ────────────────────────
+      let sarvamLangCode = 'hi-IN';
+      if (language === 'mr' || language === 'mr-IN' || language === 'marathi') {
+        sarvamLangCode = 'mr-IN';
+      } else if (language === 'en' || language === 'en-IN' || language === 'english') {
+        sarvamLangCode = 'en-IN';
+      }
+
+      const transcript = await SarvamService.transcribeAudio(audioBuffer, contentType, sarvamLangCode);
       if (!transcript || !transcript.trim()) {
         res.status(422).json({ status: 'error', message: 'No speech detected in the audio note.' });
         return;
       }
-      console.log(`[GRAMNIDAN] Transcript: "${transcript.slice(0, 100)}..."`);
+      console.log(`[GRAMNIDAN] Transcript (${sarvamLangCode}): "${transcript.slice(0, 100)}..."`);
 
       // ── Step 3: GramNidan AI Fill ─────────────────────────────────────────────
-      const gramNidanResult = await GramNidanService.fillFromTranscript(transcript, registerType);
+      const gramNidanResult = await GramNidanService.fillFromTranscript(transcript, registerType, language);
       console.log(`[GRAMNIDAN] Filled modules: ${Object.keys(gramNidanResult.filledModules).join(', ')}`);
 
-      // ── Step 4: Save to Supabase ──────────────────────────────────────────────
+      // ── Step 4: Extract Patient Name & Save to Supabase ──────────────────────
+      let resolvedPatientName = patientName && patientName !== 'Unknown' ? patientName : '';
+      if (!resolvedPatientName && gramNidanResult.filledModules) {
+        for (const mod of Object.values(gramNidanResult.filledModules)) {
+          for (const [k, v] of Object.entries(mod)) {
+            if (
+              (k.includes('name') || k.includes('woman') || k.includes('mother') || k.includes('patient') || k.includes('couple')) &&
+              typeof v === 'string' &&
+              v.trim()
+            ) {
+              resolvedPatientName = v.trim();
+              break;
+            }
+          }
+          if (resolvedPatientName) break;
+        }
+      }
+      if (!resolvedPatientName) resolvedPatientName = 'Voice Entry';
+
       const registerId = crypto.randomUUID();
       const timestamp = now();
 
@@ -81,12 +106,12 @@ export class GramNidanController {
         id: registerId,
         asha_id: ashaId,
         patient_id: patientId && isValidUuid(patientId) ? patientId : null,
-        patient_name: patientName,
+        patient_name: resolvedPatientName,
         register_type: registerType,
         transcript,
         module_data: gramNidanResult.filledModules,
         is_warning: gramNidanResult.hasWarnings,
-        submitted_to_tho: false,
+        submitted_to_tho: true,
         created_at: timestamp,
         updated_at: timestamp,
       });

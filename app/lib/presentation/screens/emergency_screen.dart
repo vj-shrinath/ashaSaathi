@@ -30,7 +30,7 @@ class EmergencyScreen extends StatelessWidget {
             ),
             const SizedBox(height: 16),
             const Text(
-              'Doctor and Family have been notified automatically via SMS and WhatsApp.',
+              'Doctor and Family have been notified automatically via SMS and Emergency Alerts.',
               textAlign: TextAlign.center,
               style: TextStyle(fontSize: 16),
             ),

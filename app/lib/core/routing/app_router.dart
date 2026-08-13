@@ -115,14 +115,18 @@ final appRouter = GoRouter(
     ),
 
     // ASHA Worker Routes
+
+    // ASHA Worker Routes
     GoRoute(
       path: '/dashboard/asha',
       builder: (context, state) => const PatientListScreen(),
     ),
     GoRoute(
       path: '/dashboard/asha/registers',
-      builder: (context, state) => const AshaRegisterScreen(),
-
+      builder: (context, state) {
+        final initialType = (state.extra as String?) ?? state.uri.queryParameters['type'];
+        return AshaRegisterScreen(initialRegisterType: initialType);
+      },
     ),
     GoRoute(
       path: '/gramnidan/register/:id',

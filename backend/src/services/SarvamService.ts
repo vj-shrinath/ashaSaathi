@@ -26,7 +26,7 @@ export class SarvamService {
    * @param audioBuffer Buffer of the audio file
    * @param mimetype Mimetype (e.g. 'audio/wav', 'audio/ogg', 'audio/m4a')
    */
-  static async transcribeAudio(audioBuffer: Buffer, mimetype: string): Promise<string> {
+  static async transcribeAudio(audioBuffer: Buffer, mimetype: string, languageCode: string = 'hi-IN'): Promise<string> {
     if (!API_KEY) throw new Error("Missing SARVAM_API_KEY");
 
     try {
@@ -39,7 +39,7 @@ export class SarvamService {
           filename: `voice_note.${ext}`,
           contentType: sarvamMime
       });
-      form.append('language_code', 'hi-IN');
+      form.append('language_code', languageCode);
       form.append('model', 'saaras:v3');
 
       const response = await axios.post(SARVAM_API_URL_SAARAS, form, {

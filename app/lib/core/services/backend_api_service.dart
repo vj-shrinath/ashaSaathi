@@ -3,6 +3,20 @@ import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:http/http.dart' as http;
 import '../models/message_model.dart';
 
+class GramNidanFillResult {
+  final String registerId;
+  final String transcript;
+  final Map<String, Map<String, String>> filledModules;
+  final bool hasWarnings;
+
+  GramNidanFillResult({
+    required this.registerId,
+    required this.transcript,
+    required this.filledModules,
+    required this.hasWarnings,
+  });
+}
+
 /// Calls the Node.js backend API for voice transcription + triage analysis.
 class BackendApiService {
   static String get _baseUrl => dotenv.env['BACKEND_API_URL'] ?? 'http://192.168.1.5:3000';
@@ -258,9 +272,8 @@ class BackendApiService {
   // ─── GramNidan AI Register Fill ──────────────────────────────────────────────
 
   /// Sends a voice audio URL + register type to the backend.
-  /// Backend runs Sarvam STT → Claude GramNidan fill → returns structured JSON.
-  /// Returns: { moduleId: { fieldId: "value" } }
-  static Future<Map<String, Map<String, String>>> fillGramNidanRegisters({
+  /// Backend runs Sarvam STT → Claude GramNidan fill → saves to Supabase → returns structured JSON.
+  static Future<GramNidanFillResult> fillGramNidanRegisters({
     required String audioUrl,
     required String registerType, // 'anc', 'hbnc', 'village', etc.
     required String ashaId,
@@ -268,6 +281,7 @@ class BackendApiService {
     String? patientId,
     String patientName = 'Unknown',
     String ashaName = 'ASHA Worker',
+    String language = 'hi',
   }) async {
     try {
       final response = await http.post(
@@ -281,18 +295,29 @@ class BackendApiService {
           'patientId': patientId,
           'patientName': patientName,
           'ashaName': ashaName,
+          'language': language,
         }),
       ).timeout(const Duration(minutes: 3));
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body) as Map<String, dynamic>;
+        final registerId = data['registerId']?.toString() ?? '';
+        final transcript = data['transcript']?.toString() ?? '';
+        final hasWarnings = data['hasWarnings'] == true;
         final rawModules = data['filledModules'] as Map<String, dynamic>? ?? {};
-        return rawModules.map((moduleId, fields) {
+        final filledModules = rawModules.map((moduleId, fields) {
           final fieldMap = (fields as Map<String, dynamic>? ?? {}).map(
             (k, v) => MapEntry(k, v?.toString() ?? ''),
           );
           return MapEntry(moduleId, fieldMap);
         });
+
+        return GramNidanFillResult(
+          registerId: registerId,
+          transcript: transcript,
+          filledModules: filledModules,
+          hasWarnings: hasWarnings,
+        );
       } else {
         throw Exception('GramNidan backend error: ${response.statusCode} ${response.body}');
       }

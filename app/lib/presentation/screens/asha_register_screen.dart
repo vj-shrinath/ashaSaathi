@@ -11,9 +11,12 @@ import '../widgets/idsp_disease_widget.dart';
 import 'gramnidan_module_definitions.dart';
 import '../../core/services/pdf_generation_service.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:printing/printing.dart';
 
 class AshaRegisterScreen extends StatefulWidget {
-  const AshaRegisterScreen({super.key});
+  final String? initialRegisterType;
+
+  const AshaRegisterScreen({super.key, this.initialRegisterType});
 
   @override
   State<AshaRegisterScreen> createState() => _AshaRegisterScreenState();
@@ -29,6 +32,8 @@ class _AshaRegisterScreenState extends State<AshaRegisterScreen>
   bool _showResults = false;
   String _processingStep = '';
   String _liveTranscript = '';
+  int _recordDurationSeconds = 0;
+  Timer? _timer;
 
   /// After AI fills, this holds: { moduleId: { fieldId: value } }
   Map<String, Map<String, String>> _filledModules = {};
@@ -40,17 +45,98 @@ class _AshaRegisterScreenState extends State<AshaRegisterScreen>
   final ScrollController _scrollController = ScrollController();
   final GlobalKey _voiceInputKey = GlobalKey();
 
+  final Map<String, GlobalKey> _moduleKeys = {};
+
   @override
   void initState() {
     super.initState();
+    _selectedRegisterType = widget.initialRegisterType;
+
     _pulseController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 900),
     )..repeat(reverse: true);
+
+    for (final m in GramNidanModuleDefinitions.modules) {
+      _moduleKeys[m.id] = GlobalKey();
+    }
+
+    if (_selectedRegisterType != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (_voiceInputKey.currentContext != null) {
+          Scrollable.ensureVisible(
+            _voiceInputKey.currentContext!,
+            duration: const Duration(milliseconds: 500),
+            curve: Curves.easeInOut,
+            alignment: 0.1,
+          );
+        }
+      });
+    }
+  }
+
+  List<String> _getModuleIdsForRegisterType(String? type) {
+    switch (type) {
+      case 'pregnancy':
+        return ['anc', 'delivery'];
+      case 'newborn':
+        return ['hbnc'];
+      case 'child':
+        return ['hbyc', 'child'];
+      case 'household':
+        return ['village'];
+      case 'bpsugar':
+        return ['ncd'];
+      case 'cbac':
+        return ['cbac'];
+      case 'idsp':
+        return ['idsp'];
+      case 'monthly':
+        return ['inventory'];
+      default:
+        return [];
+    }
+  }
+
+  void _scrollToModuleCard(String? registerType) {
+    final related = _getModuleIdsForRegisterType(registerType);
+    final targetId = related.isNotEmpty ? related.first : null;
+    if (targetId != null && _moduleKeys[targetId]?.currentContext != null) {
+      Scrollable.ensureVisible(
+        _moduleKeys[targetId]!.currentContext!,
+        duration: const Duration(milliseconds: 600),
+        curve: Curves.easeInOut,
+        alignment: 0.05,
+      );
+    } else if (_scrollController.hasClients) {
+      _scrollController.animateTo(
+        _scrollController.position.maxScrollExtent,
+        duration: const Duration(milliseconds: 600),
+        curve: Curves.easeOut,
+      );
+    }
+  }
+
+  void _startTimer() {
+    _timer?.cancel();
+    _recordDurationSeconds = 0;
+    _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (mounted) {
+        setState(() {
+          _recordDurationSeconds++;
+        });
+      }
+    });
+  }
+
+  void _stopTimer() {
+    _timer?.cancel();
+    _timer = null;
   }
 
   @override
   void dispose() {
+    _stopTimer();
     _recorder.dispose();
     _pulseController.dispose();
     _scrollController.dispose();
@@ -60,18 +146,14 @@ class _AshaRegisterScreenState extends State<AshaRegisterScreen>
   // ── Register tile definitions ─────────────────────────────────────────────
 
   static const _registerTiles = [
-    _RegisterTile('anc',        Icons.pregnant_woman, 'Pregnancy',      'ANC Tracking',       Color(0xFFC2185B)),
-    _RegisterTile('hbnc',       Icons.child_friendly, 'Newborn',         'HBNC (0-28 days)',     Color(0xFF1A4731)),
-    _RegisterTile('hbyc',       Icons.child_care, 'Child Health',    'HBYC (3-15 months)',           Color(0xFF2D6A4F)),
-    _RegisterTile('child',      Icons.vaccines, 'Vaccination',     'HBYC + UIP Register',         Color(0xFF00838F)),
-    _RegisterTile('village',    Icons.holiday_village, 'Household',       'Village Auth',      Color(0xFF023E8A)),
-    _RegisterTile('ncd',        Icons.favorite, 'BP / Sugar',      'NCD Tracking',       Color(0xFF7B1E1E)),
-    _RegisterTile('ec',         Icons.family_restroom, 'Eligible Couple', 'Family Planning',    Color(0xFF7B2D8E)),
-    _RegisterTile('delivery',   Icons.local_hospital, 'Delivery/PNC',  'Prasav PNC',    Color(0xFFAD1457)),
-    _RegisterTile('idsp',       Icons.biotech, 'Disease Surv.',   'IDSP Sanchar Rog',   Color(0xFF6A4C93)),
-    _RegisterTile('birthdeath', Icons.assignment, 'Birth & Death',   'Janm Mrityu Info',        Color(0xFF4A4A4A)),
-    _RegisterTile('claim',      Icons.attach_money, 'JSY Claim',  'Govt Scheme Claim',       Color(0xFFB8860B)),
-    _RegisterTile('cbac',       Icons.assignment_ind, 'CBAC (30+)',      'NCD Screening',      Color(0xFFBB3E03)),
+    _RegisterTile('pregnancy', '🤰', 'Pregnancy', 'ANC Tracking Register', Color(0xFF1A4731)),
+    _RegisterTile('newborn', '👶', 'Newborn', 'HBNC Register (0-28 din)', Color(0xFFF4A261)),
+    _RegisterTile('child', '🧒', 'Child Health', 'HBYC + Vaccination', Color(0xFFE9C46A)),
+    _RegisterTile('household', '🏘️', 'Household Survey', 'Gaon Swasthya Nondvahi', Color(0xFFE76F51)),
+    _RegisterTile('bpsugar', '❤️', 'BP / Sugar', 'NCD Tracking Register', Color(0xFFD62828)),
+    _RegisterTile('cbac', '🩺', 'CBAC Register', 'Community Assessment Checklist', Color(0xFF023E8A)),
+    _RegisterTile('idsp', '🦟', 'Disease Tracker', 'IDSP Disease Surveillance', Color(0xFF6A4C93)),
+    _RegisterTile('monthly', '📊', 'Monthly Report', 'ANM & PHC Submissions', Color(0xFF2D6A4F)),
   ];
 
   // ── Voice Recording ──────────────────────────────────────────────────────
@@ -94,22 +176,26 @@ class _AshaRegisterScreenState extends State<AshaRegisterScreen>
       _isRecording = true;
       _liveTranscript = '';
     });
+    _startTimer();
   }
 
   Future<void> _stopAndProcess() async {
     if (!_isRecording) return;
+    _stopTimer();
     final path = await _recorder.stop();
     setState(() => _isRecording = false);
     if (path == null || _selectedRegisterType == null) return;
     await _processVoiceNote(path);
   }
 
+  String _selectedLanguage = 'hi'; // Hindi ('hi'), Marathi ('mr'), English ('en')
+
   Future<void> _processVoiceNote(String audioPath) async {
     setState(() {
       _isProcessing = true;
       _showResults = false;
       _filledModules = {};
-      _processingStep = 'Uploading audio...';
+      _processingStep = 'Uploading audio stream...';
     });
 
     try {
@@ -117,52 +203,33 @@ class _AshaRegisterScreenState extends State<AshaRegisterScreen>
       if (user == null) throw Exception('User not logged in');
 
       // ── 1. Upload audio to Supabase Storage ─────────────────────────────
-      setState(() => _processingStep = 'Processing audio in cloud...');
+      setState(() => _processingStep = 'Processing audio in cloud AI model...');
       final file = await _uploadAudioToStorage(audioPath, user.id);
 
-      // ── 2. Call GramNidan Backend ────────────────────────────────────────
-      setState(() => _processingStep = 'Extracting fields via AI...');
-      final filledModules = await BackendApiService.fillGramNidanRegisters(
+      // ── 2. Call GramNidan Backend (AI extraction & DB save) ─────────────
+      setState(() => _processingStep = 'Extracting GramNidan fields & structuring...');
+      final result = await BackendApiService.fillGramNidanRegisters(
         audioUrl: file,
         registerType: _selectedRegisterType!,
         ashaId: user.id,
         ashaName: user.userMetadata?['full_name'] ?? 'ASHA Worker',
+        language: _selectedLanguage,
       );
 
-      // ── 3. Save to Supabase ──────────────────────────────────────────────
-      setState(() => _processingStep = 'Saving data...');
-      final hasWarnings = filledModules.values.any(
-        (fields) => fields.values.any((v) => v.contains('⚠️')),
-      );
-      final register = GramNidanRegister(
-        id: '',
-        ashaId: user.id,
-        patientName: 'Voice Entry',
-        registerType: _selectedRegisterType!,
-        moduleData: filledModules,
-        isWarning: hasWarnings,
-        createdAt: DateTime.now(),
-        updatedAt: DateTime.now(),
-      );
-      final registerId = await FirebaseService.saveGramNidanRegister(register);
+      if (!mounted) return;
 
       setState(() {
         _isProcessing = false;
         _showResults = true;
-        _filledModules = filledModules;
-        _hasWarnings = hasWarnings;
-        _savedRegisterId = registerId;
+        _filledModules = result.filledModules;
+        _hasWarnings = result.hasWarnings;
+        _savedRegisterId = result.registerId;
       });
 
-      // Scroll to results
-      await Future.delayed(const Duration(milliseconds: 200));
-      if (_scrollController.hasClients) {
-        _scrollController.animateTo(
-          _scrollController.position.maxScrollExtent,
-          duration: const Duration(milliseconds: 600),
-          curve: Curves.easeOut,
-        );
-      }
+      // Auto-scroll directly to related module card
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _scrollToModuleCard(_selectedRegisterType);
+      });
     } catch (e) {
       setState(() {
         _isProcessing = false;
@@ -186,12 +253,52 @@ class _AshaRegisterScreenState extends State<AshaRegisterScreen>
     );
   }
 
-  // ── Submit to THO ─────────────────────────────────────────────────────────
+  // ── Save PDF / Submit to MO ───────────────────────────────────────────────
 
-  Future<void> _submitToTho() async {
+  Future<void> _savePdfToLocal() async {
     if (_savedRegisterId == null) return;
     
-    // Show a loading dialog
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const Center(child: CircularProgressIndicator()),
+    );
+
+    try {
+      final user = Supabase.instance.client.auth.currentUser;
+      final register = GramNidanRegister(
+        id: _savedRegisterId!,
+        ashaId: user?.id ?? '',
+        patientName: 'Voice Entry',
+        registerType: _selectedRegisterType!,
+        moduleData: _filledModules,
+        isWarning: _hasWarnings,
+        createdAt: DateTime.now(),
+        updatedAt: DateTime.now(),
+      );
+
+      final pdfBytes = await PdfGenerationService.generateRegisterPdf(register);
+      
+      if (mounted) {
+        Navigator.pop(context);
+        await Printing.layoutPdf(
+          onLayout: (format) async => pdfBytes,
+          name: 'GramNidan_Register_${_selectedRegisterType}_${DateTime.now().millisecondsSinceEpoch}.pdf',
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        Navigator.pop(context);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Save PDF failed: $e')),
+        );
+      }
+    }
+  }
+
+  Future<void> _submitToMo() async {
+    if (_savedRegisterId == null) return;
+    
     showDialog(
       context: context,
       barrierDismissible: false,
@@ -215,14 +322,18 @@ class _AshaRegisterScreenState extends State<AshaRegisterScreen>
       final pdfBytes = await PdfGenerationService.generateRegisterPdf(register);
       final pdfUrl = await FirebaseService.uploadRegisterPdf(pdfBytes, _savedRegisterId!);
       
-      // Submit to THO
-      await FirebaseService.submitGramNidanToTho(_savedRegisterId!, pdfUrl: pdfUrl);
+      // Submit to MO
+      await FirebaseService.submitGramNidanToTho(
+        _savedRegisterId!, 
+        pdfUrl: pdfUrl,
+        moduleData: _filledModules,
+      );
       
       if (mounted) {
         Navigator.pop(context); // hide loading
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('✅ Successfully submitted to THO!'),
+            content: Text('✅ Successfully sent to Medical Officer (MO)!'),
             backgroundColor: Color(0xFF2D6A4F),
           ),
         );
@@ -231,7 +342,7 @@ class _AshaRegisterScreenState extends State<AshaRegisterScreen>
       if (mounted) {
         Navigator.pop(context); // hide loading
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Submit failed: $e')),
+          SnackBar(content: Text('Send failed: $e')),
         );
       }
     }
@@ -242,29 +353,56 @@ class _AshaRegisterScreenState extends State<AshaRegisterScreen>
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    
+    final isDark = theme.brightness == Brightness.dark;
+
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Voice Register'),
+        title: const Text(
+          'GramNidan Voice Registers',
+          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
+        ),
         centerTitle: true,
+        elevation: 0,
       ),
       body: SingleChildScrollView(
         controller: _scrollController,
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             // ── How it works banner ──────────────────────────────────────
             _HowItWorksBanner(),
-            const SizedBox(height: 24),
+            const SizedBox(height: 20),
 
-            // ── Register Selector ────────────────────────────────────────
-            Text(
-              'Select Register Type',
-              style: theme.textTheme.titleMedium?.copyWith(
-                fontWeight: FontWeight.bold,
-                color: theme.colorScheme.primary,
-              ),
+            // ── Register Selector Title ───────────────────────────────────
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  'Select Register Type',
+                  style: theme.textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w800,
+                    color: isDark ? Colors.white : const Color(0xFF1B4332),
+                    letterSpacing: 0.2,
+                  ),
+                ),
+                if (_selectedRegisterType != null)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF2D6A4F).withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: const Text(
+                      'ACTIVE',
+                      style: TextStyle(
+                        color: Color(0xFF2D6A4F),
+                        fontSize: 10,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+              ],
             ),
             const SizedBox(height: 12),
             _RegisterGrid(
@@ -273,17 +411,17 @@ class _AshaRegisterScreenState extends State<AshaRegisterScreen>
               onSelect: (type) {
                 setState(() {
                   _selectedRegisterType = type;
-                  _showResults = false;
-                  _filledModules = {};
                 });
                 
                 WidgetsBinding.instance.addPostFrameCallback((_) {
-                  if (_voiceInputKey.currentContext != null) {
+                  if (_showResults) {
+                    _scrollToModuleCard(type);
+                  } else if (_voiceInputKey.currentContext != null) {
                     Scrollable.ensureVisible(
                       _voiceInputKey.currentContext!,
                       duration: const Duration(milliseconds: 500),
                       curve: Curves.easeInOut,
-                      alignment: 0.1, // Align near the top of viewport
+                      alignment: 0.1,
                     );
                   }
                 });
@@ -296,7 +434,10 @@ class _AshaRegisterScreenState extends State<AshaRegisterScreen>
               _VoiceInputCard(
                 key: _voiceInputKey,
                 registerType: _selectedRegisterType!,
+                selectedLanguage: _selectedLanguage,
+                onLanguageChanged: (lang) => setState(() => _selectedLanguage = lang),
                 isRecording: _isRecording,
+                recordDurationSeconds: _recordDurationSeconds,
                 liveTranscript: _liveTranscript,
                 pulseController: _pulseController,
                 onStart: _startRecording,
@@ -310,41 +451,72 @@ class _AshaRegisterScreenState extends State<AshaRegisterScreen>
               _ProcessingCard(step: _processingStep),
 
             // ── GramNidan AI Results ─────────────────────────────────────
-            if (_showResults && _filledModules.isNotEmpty) ...[
+            if (_showResults) ...[
               const SizedBox(height: 16),
-              _ResultsHeader(
-                hasWarnings: _hasWarnings,
-                filledCount: _filledModules.length,
-              ),
-              const SizedBox(height: 12),
-              // Render one accordion card per filled module
-              ...GramNidanModuleDefinitions.modules
-                  .where((m) => _filledModules.containsKey(m.id))
-                  .map((module) => GramNidanModuleCard(
-                        module: module,
-                        filledFields: _filledModules[module.id] ?? {},
-                        startExpanded: true,
-                        onFieldEdited: (fieldId, newValue) {
-                          setState(() {
-                            _filledModules[module.id]![fieldId] = newValue;
-                          });
-                        },
-                      )),
-              // Show idsp widget specifically for idsp module
-              if (_selectedRegisterType == 'idsp' &&
-                  !_filledModules.containsKey('idsp'))
-                IdspDiseaseWidget(
-                  onDataChanged: (idspData) {
-                    setState(() {
-                      _filledModules['idsp'] = idspData;
-                    });
-                  },
+              if (_filledModules.isEmpty)
+                Card(
+                  elevation: 0,
+                  color: Colors.orange.withValues(alpha: 0.08),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16),
+                    side: BorderSide(color: Colors.orange.withValues(alpha: 0.3)),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.all(20),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.info_outline, color: Colors.orange),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Text(
+                            'AI could not extract structured data from this recording. Try recording again with clearer patient details.',
+                            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                              color: Colors.orange[800],
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                )
+              else ...[
+                _ResultsHeader(
+                  hasWarnings: _hasWarnings,
+                  filledCount: _filledModules.length,
                 ),
-              const SizedBox(height: 24),
-              _SubmitBar(
-                onSubmitToTho: _submitToTho,
-                registerId: _savedRegisterId,
-              ),
+                const SizedBox(height: 12),
+
+                // ── Continuous stream of all register modules ──
+                ...GramNidanModuleDefinitions.modules.map((module) {
+                  final filled = _filledModules[module.id];
+                  final isFilled = filled != null && filled.isNotEmpty;
+                  final related = _getModuleIdsForRegisterType(_selectedRegisterType);
+                  final isRelated = related.contains(module.id);
+
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: GramNidanModuleCard(
+                      key: _moduleKeys[module.id],
+                      module: module,
+                      filledFields: filled ?? {},
+                      startExpanded: isFilled || isRelated,
+                      onFieldEdited: (fieldId, newValue) {
+                        setState(() {
+                          _filledModules[module.id] ??= {};
+                          _filledModules[module.id]![fieldId] = newValue;
+                        });
+                      },
+                    ),
+                  );
+                }),
+
+                const SizedBox(height: 24),
+                _SubmitBar(
+                  onSubmitToMo: _submitToMo,
+                  onSaveLocal: _savePdfToLocal,
+                  registerId: _savedRegisterId,
+                ),
+              ],
             ],
 
             // ── If idsp selected but processing not started — show widget ─
@@ -379,42 +551,129 @@ class _HowItWorksBanner extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return Card(
-      elevation: 0,
-      color: theme.colorScheme.primaryContainer.withValues(alpha: 0.6),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16),
+    final isDark = theme.brightness == Brightness.dark;
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: isDark
+              ? [const Color(0xFF1B4332), const Color(0xFF0F2E20)]
+              : [const Color(0xFFE8F5E9), const Color(0xFFC8E6C9)],
+        ),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(
+          color: const Color(0xFF2D6A4F).withValues(alpha: 0.3),
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.05),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
       ),
-      child: Padding(
-        padding: const EdgeInsets.all(16.0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: const BoxDecoration(
+                  color: Color(0xFF2D6A4F),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.auto_awesome_rounded,
+                  color: Colors.white,
+                  size: 20,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'AI Voice Register Assistant',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                        color: isDark ? Colors.white : const Color(0xFF1B4332),
+                      ),
+                    ),
+                    Text(
+                      'Speak naturally in Hindi, Marathi, or English',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: isDark ? Colors.white70 : const Color(0xFF2D6A4F),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+
+          // 3-step workflow pills
+          Row(
+            children: [
+              _buildStepPill(context, step: '1', label: 'Select Register'),
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 4),
+                child: Icon(Icons.chevron_right_rounded, size: 16, color: Colors.grey),
+              ),
+              _buildStepPill(context, step: '2', label: 'Record Voice'),
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 4),
+                child: Icon(Icons.chevron_right_rounded, size: 16, color: Colors.grey),
+              ),
+              _buildStepPill(context, step: '3', label: 'Auto-Fill & Save'),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStepPill(BuildContext context, {required String step, required String label}) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    return Expanded(
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 6),
+        decoration: BoxDecoration(
+          color: isDark
+              ? Colors.white.withValues(alpha: 0.1)
+              : Colors.white.withValues(alpha: 0.7),
+          borderRadius: BorderRadius.circular(10),
+        ),
         child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
           children: [
             CircleAvatar(
-              backgroundColor: theme.colorScheme.primary.withValues(alpha: 0.2),
-              radius: 24,
-              child: Icon(Icons.mic, color: theme.colorScheme.primary, size: 28),
+              radius: 9,
+              backgroundColor: const Color(0xFF2D6A4F),
+              child: Text(
+                step,
+                style: const TextStyle(fontSize: 10, color: Colors.white, fontWeight: FontWeight.bold),
+              ),
             ),
-            const SizedBox(width: 16),
+            const SizedBox(width: 4),
             Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'AI-Powered Registers',
-                    style: theme.textTheme.titleSmall?.copyWith(
-                      fontWeight: FontWeight.bold,
-                      color: theme.colorScheme.primary,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    'Select a register and record your voice note. The AI will automatically extract and structure the information into the required format.',
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant,
-                      height: 1.4,
-                    ),
-                  ),
-                ],
+              child: Text(
+                label,
+                style: TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.bold,
+                  color: isDark ? Colors.white : Colors.black87,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
               ),
             ),
           ],
@@ -427,11 +686,11 @@ class _HowItWorksBanner extends StatelessWidget {
 // ── Register tile model ───────────────────────────────────────────────────────
 class _RegisterTile {
   final String id;
-  final IconData icon;
+  final String emoji;
   final String title;
   final String subtitle;
   final Color accent;
-  const _RegisterTile(this.id, this.icon, this.title, this.subtitle, this.accent);
+  const _RegisterTile(this.id, this.emoji, this.title, this.subtitle, this.accent);
 }
 
 class _RegisterGrid extends StatelessWidget {
@@ -444,6 +703,8 @@ class _RegisterGrid extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+
     return GridView.builder(
       shrinkWrap: true,
       physics: const NeverScrollableScrollPhysics(),
@@ -457,65 +718,103 @@ class _RegisterGrid extends StatelessWidget {
       itemBuilder: (context, i) {
         final tile = tiles[i];
         final isSelected = tile.id == selected;
-        return Card(
-          elevation: isSelected ? 2 : 0,
-          color: isSelected ? tile.accent.withValues(alpha: 0.1) : theme.cardColor,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
-            side: BorderSide(
-              color: isSelected ? tile.accent : theme.dividerColor.withValues(alpha: 0.3),
-              width: isSelected ? 2 : 1,
+
+        return AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          decoration: BoxDecoration(
+            color: isSelected
+                ? tile.accent.withValues(alpha: isDark ? 0.25 : 0.12)
+                : (isDark ? const Color(0xFF1E2C35) : Colors.white),
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(
+              color: isSelected
+                  ? tile.accent
+                  : (isDark ? Colors.white12 : Colors.grey.shade200),
+              width: isSelected ? 2.5 : 1,
             ),
+            boxShadow: isSelected
+                ? [
+                    BoxShadow(
+                      color: tile.accent.withValues(alpha: 0.3),
+                      blurRadius: 10,
+                      offset: const Offset(0, 4),
+                    ),
+                  ]
+                : [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.03),
+                      blurRadius: 4,
+                    ),
+                  ],
           ),
-          margin: EdgeInsets.zero,
-          child: InkWell(
-            borderRadius: BorderRadius.circular(16),
-            onTap: () => onSelect(tile.id),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-              child: Row(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: isSelected ? tile.accent.withValues(alpha: 0.2) : theme.colorScheme.surfaceContainerHighest,
-                      shape: BoxShape.circle,
+          child: Material(
+            color: Colors.transparent,
+            borderRadius: BorderRadius.circular(18),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(18),
+              onTap: () => onSelect(tile.id),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                child: Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: isSelected
+                            ? tile.accent.withValues(alpha: 0.25)
+                            : theme.colorScheme.surfaceContainerHighest,
+                        shape: BoxShape.circle,
+                      ),
+                      child: Text(
+                        tile.emoji,
+                        style: const TextStyle(fontSize: 20),
+                      ),
                     ),
-                    child: Icon(
-                      tile.icon,
-                      color: isSelected ? tile.accent : theme.colorScheme.onSurfaceVariant,
-                      size: 20,
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Text(
-                          tile.title,
-                          style: theme.textTheme.labelLarge?.copyWith(
-                            fontWeight: FontWeight.bold,
-                            color: isSelected ? tile.accent : theme.colorScheme.onSurface,
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  tile.title,
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 13,
+                                    color: isSelected
+                                        ? tile.accent
+                                        : (isDark ? Colors.white : Colors.black87),
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                              if (isSelected)
+                                Icon(
+                                  Icons.check_circle_rounded,
+                                  size: 14,
+                                  color: tile.accent,
+                                ),
+                            ],
                           ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          tile.subtitle,
-                          style: theme.textTheme.labelSmall?.copyWith(
-                            color: theme.colorScheme.onSurfaceVariant,
-                            fontSize: 9,
+                          const SizedBox(height: 2),
+                          Text(
+                            tile.subtitle,
+                            style: TextStyle(
+                              color: isDark ? Colors.white60 : Colors.grey[600],
+                              fontSize: 9.5,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                           ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
           ),
@@ -527,7 +826,10 @@ class _RegisterGrid extends StatelessWidget {
 
 class _VoiceInputCard extends StatelessWidget {
   final String registerType;
+  final String selectedLanguage;
+  final ValueChanged<String> onLanguageChanged;
   final bool isRecording;
+  final int recordDurationSeconds;
   final String liveTranscript;
   final AnimationController pulseController;
   final VoidCallback onStart;
@@ -536,7 +838,10 @@ class _VoiceInputCard extends StatelessWidget {
   const _VoiceInputCard({
     super.key,
     required this.registerType,
+    required this.selectedLanguage,
+    required this.onLanguageChanged,
     required this.isRecording,
+    required this.recordDurationSeconds,
     required this.liveTranscript,
     required this.pulseController,
     required this.onStart,
@@ -544,49 +849,179 @@ class _VoiceInputCard extends StatelessWidget {
   });
 
   static const _hints = {
-    'anc': 'Mention patient name, months pregnant, BP reading, and IFA details...',
-    'hbnc': 'Mention newborn name, weight, umbilical cord state, breast feeding...',
-    'village': 'Mention house number, head name, family size, sanitation details...',
-    'ncd': 'Mention patient name, BP, sugar level, current medications, symptoms...',
-    'cbac': 'Mention patient name, age, tobacco/alcohol habits, family history...',
-    'idsp': 'Mention communicable disease if any (TB, Malaria) with patient name...',
-    'child': 'Mention child name, weight, today\'s vaccines, any recent illness...',
-    'delivery': 'Mention delivery date, location, baby weight, mother health...',
-    'hbyc': 'Mention child name, age, weight, diet intake, current milestones...',
-    'ec': 'Mention couple names, age, children count, family planning methods...',
-    'birthdeath': 'Mention birth/death details, date, reason and family info...',
-    'claim': 'Mention beneficiary name, delivery location and claim amount...',
+    'pregnancy': 'Patient ka naam, umra, pati ka naam, gaon, mahine, BP, IFA le rahi hai ya nahi, ANC visit, koi takleef — yeh bolo:',
+    'newborn': 'Bachche ka naam, vajan, maa ka naam, tapman, naaf ki stithi, doodh pi raha hai ya nahi — yeh bolo:',
+    'child': 'Bachche ka naam, vajan, kaun sa tika laga, diet kaisa hai — yeh bolo:',
+    'household': 'Ghar ka number, mukhya ka naam, kitne sadasya, mobile number — yeh bolo:',
+    'bpsugar': 'Patient ka naam, umra, aaj ka BP ya sugar reading, dawa chal rahi hai — yeh bolo:',
+    'cbac': 'Patient ka naam, umra, tambaku ya sharab ki aadat, kamar ka naap — yeh bolo:',
+    'idsp': 'Mariyaz ka naam, bukhar, khansi ya koi anokha lakshan — yeh bolo:',
+    'monthly': 'Is mahine ki poori detail, kitne new registration hue — yeh bolo:',
   };
+
+  String _formatDuration(int seconds) {
+    final mins = (seconds ~/ 60).toString().padLeft(2, '0');
+    final secs = (seconds % 60).toString().padLeft(2, '0');
+    return '$mins:$secs';
+  }
 
   @override
   Widget build(BuildContext context) {
     final hint = _hints[registerType] ?? 'Tap to record patient details directly into the register...';
     final theme = Theme.of(context);
-    
-    return Card(
-      elevation: 0,
-      color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(20),
+    final isDark = theme.brightness == Brightness.dark;
+
+    return Container(
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF1E2C35) : Colors.white,
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(
+          color: isRecording
+              ? Colors.red.shade400
+              : const Color(0xFF2D6A4F).withValues(alpha: 0.3),
+          width: isRecording ? 2 : 1,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: isRecording
+                ? Colors.red.withValues(alpha: 0.15)
+                : Colors.black.withValues(alpha: 0.05),
+            blurRadius: 16,
+            offset: const Offset(0, 6),
+          ),
+        ],
       ),
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.center,
           children: [
-            Text(
-              'Voice Input',
-              style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(Icons.mic_none_rounded, color: Color(0xFF2D6A4F), size: 22),
+                const SizedBox(width: 8),
+                Text(
+                  'Voice Note Input',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                    color: isDark ? Colors.white : const Color(0xFF1B4332),
+                  ),
+                ),
+              ],
             ),
-            const SizedBox(height: 8),
-            Text(
-              hint,
-              textAlign: TextAlign.center,
-              style: theme.textTheme.bodyMedium?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
+            const SizedBox(height: 12),
+
+            // Hint box
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: const Color(0xFF2D6A4F).withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.lightbulb_outline_rounded, color: Color(0xFF2D6A4F), size: 18),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      hint,
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: isDark ? Colors.white70 : Colors.grey[800],
+                        height: 1.3,
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
-            const SizedBox(height: 24),
+
+            const SizedBox(height: 16),
+
+            // Language Selector Choice Chips
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Text(
+                    '🌐 Bhasha: ',
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                      color: isDark ? Colors.white70 : Colors.grey[700],
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                  ChoiceChip(
+                    label: const Text('🇮🇳 हिंदी', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                    selected: selectedLanguage == 'hi',
+                    selectedColor: const Color(0xFF2D6A4F).withValues(alpha: 0.2),
+                    onSelected: (val) {
+                      if (val) onLanguageChanged('hi');
+                    },
+                  ),
+                  const SizedBox(width: 6),
+                  ChoiceChip(
+                    label: const Text('🚩 मराठी', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                    selected: selectedLanguage == 'mr',
+                    selectedColor: Colors.orange.shade100,
+                    onSelected: (val) {
+                      if (val) onLanguageChanged('mr');
+                    },
+                  ),
+                  const SizedBox(width: 6),
+                  ChoiceChip(
+                    label: const Text('🇬🇧 English', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                    selected: selectedLanguage == 'en',
+                    selectedColor: Colors.blue.shade100,
+                    onSelected: (val) {
+                      if (val) onLanguageChanged('en');
+                    },
+                  ),
+                ],
+              ),
+            ),
+
+            const SizedBox(height: 20),
+
+            // Recording Timer Badge
+            if (isRecording) ...[
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                decoration: BoxDecoration(
+                  color: Colors.red.shade50,
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: Colors.red.shade300),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 8,
+                      height: 8,
+                      decoration: const BoxDecoration(
+                        color: Colors.red,
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      'Recording... ${_formatDuration(recordDurationSeconds)}',
+                      style: TextStyle(
+                        color: Colors.red.shade800,
+                        fontSize: 13,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 16),
+            ],
+
             if (liveTranscript.isNotEmpty) ...[
               Container(
                 width: double.infinity,
@@ -606,40 +1041,75 @@ class _VoiceInputCard extends StatelessWidget {
               ),
               const SizedBox(height: 20),
             ],
+
+            // Animated Mic Button with Ripple Ring Effect
             GestureDetector(
               onTap: isRecording ? onStop : onStart,
               child: AnimatedBuilder(
                 animation: pulseController,
                 builder: (context, child) {
-                  final color = isRecording 
-                      ? Color.lerp(theme.colorScheme.error, theme.colorScheme.errorContainer, pulseController.value)
-                      : theme.colorScheme.primary;
-                  
-                  return Container(
-                    width: 72,
-                    height: 72,
-                    decoration: BoxDecoration(
-                      color: color,
-                      shape: BoxShape.circle,
-                      boxShadow: isRecording
-                          ? [BoxShadow(color: theme.colorScheme.error.withValues(alpha: 0.4 * pulseController.value), blurRadius: 20, spreadRadius: 4)]
-                          : [BoxShadow(color: theme.colorScheme.primary.withValues(alpha: 0.2), blurRadius: 10, offset: const Offset(0, 4))],
-                    ),
-                    child: Icon(
-                      isRecording ? Icons.stop_rounded : Icons.mic_rounded,
-                      color: theme.colorScheme.onPrimary,
-                      size: 32,
-                    ),
+                  return Stack(
+                    alignment: Alignment.center,
+                    children: [
+                      if (isRecording) ...[
+                        Container(
+                          width: 108 + (pulseController.value * 20),
+                          height: 108 + (pulseController.value * 20),
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: Colors.red.withValues(alpha: 0.15 * (1 - pulseController.value)),
+                          ),
+                        ),
+                        Container(
+                          width: 90 + (pulseController.value * 12),
+                          height: 90 + (pulseController.value * 12),
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: Colors.red.withValues(alpha: 0.25 * (1 - pulseController.value)),
+                          ),
+                        ),
+                      ],
+                      Container(
+                        width: 76,
+                        height: 76,
+                        decoration: BoxDecoration(
+                          gradient: isRecording
+                              ? const LinearGradient(
+                                  colors: [Color(0xFFDC2626), Color(0xFFEF4444)],
+                                )
+                              : const LinearGradient(
+                                  colors: [Color(0xFF1B4332), Color(0xFF2D6A4F)],
+                                ),
+                          shape: BoxShape.circle,
+                          boxShadow: [
+                            BoxShadow(
+                              color: isRecording
+                                  ? Colors.red.withValues(alpha: 0.4)
+                                  : const Color(0xFF2D6A4F).withValues(alpha: 0.3),
+                              blurRadius: 16,
+                              offset: const Offset(0, 6),
+                            ),
+                          ],
+                        ),
+                        child: Icon(
+                          isRecording ? Icons.stop_rounded : Icons.mic_rounded,
+                          color: Colors.white,
+                          size: 36,
+                        ),
+                      ),
+                    ],
                   );
                 },
               ),
             ),
-            const SizedBox(height: 16),
+
+            const SizedBox(height: 14),
             Text(
-              isRecording ? 'Recording... tap to stop' : 'Tap to Record',
-              style: theme.textTheme.labelLarge?.copyWith(
-                color: isRecording ? theme.colorScheme.error : theme.colorScheme.primary,
+              isRecording ? 'Tap to Stop & Extract' : 'Tap to Record Voice Note',
+              style: TextStyle(
+                color: isRecording ? Colors.red[700] : const Color(0xFF2D6A4F),
                 fontWeight: FontWeight.bold,
+                fontSize: 14,
               ),
             ),
           ],
@@ -656,33 +1126,56 @@ class _ProcessingCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return Card(
-      elevation: 0,
-      color: theme.colorScheme.surfaceContainer,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      child: Padding(
-        padding: const EdgeInsets.all(20),
-        child: Row(
-          children: [
-            SizedBox(
-              width: 24,
-              height: 24,
-              child: CircularProgressIndicator(
-                strokeWidth: 2.5,
-                color: theme.colorScheme.primary,
-              ),
-            ),
-            const SizedBox(width: 16),
-            Expanded(
-              child: Text(
-                step,
-                style: theme.textTheme.titleSmall?.copyWith(
-                  fontWeight: FontWeight.w600,
+    final isDark = theme.brightness == Brightness.dark;
+
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF1E2C35) : Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: const Color(0xFF2D6A4F).withValues(alpha: 0.3)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.05),
+            blurRadius: 12,
+          ),
+        ],
+      ),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              const SizedBox(
+                width: 24,
+                height: 24,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2.8,
+                  color: Color(0xFF2D6A4F),
                 ),
               ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Text(
+                  step,
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 14,
+                    color: isDark ? Colors.white : const Color(0xFF1B4332),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(4),
+            child: const LinearProgressIndicator(
+              color: Color(0xFF2D6A4F),
+              backgroundColor: Color(0x222D6A4F),
+              minHeight: 4,
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
@@ -696,43 +1189,48 @@ class _ResultsHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+
     return Container(
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
-        color: theme.colorScheme.secondaryContainer,
-        borderRadius: BorderRadius.circular(16),
+        color: isDark ? const Color(0xFF1A2E26) : const Color(0xFFE8F5E9),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: const Color(0xFF2D6A4F).withValues(alpha: 0.3)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              Icon(Icons.auto_awesome, color: theme.colorScheme.secondary, size: 20),
+              const Icon(Icons.auto_awesome, color: Color(0xFF2D6A4F), size: 20),
               const SizedBox(width: 8),
               Text(
-                'AI Extracted Data',
-                style: theme.textTheme.titleMedium?.copyWith(
+                'AI Extracted GramNidan Data',
+                style: TextStyle(
                   fontWeight: FontWeight.bold,
-                  color: theme.colorScheme.onSecondaryContainer,
+                  fontSize: 16,
+                  color: isDark ? Colors.white : const Color(0xFF1B4332),
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 10),
           Row(
             children: [
-              _Badge('$filledCount Modules Checked', theme.colorScheme.primary),
+              _Badge('$filledCount Modules Checked', const Color(0xFF2D6A4F)),
               if (hasWarnings) ...[
                 const SizedBox(width: 8),
-                _Badge('⚠️ Review Required', theme.colorScheme.error),
+                const _Badge('⚠️ Review Required', Colors.red),
               ],
             ],
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 10),
           Text(
             'Tap any extracted field to modify it manually before submitting.',
-            style: theme.textTheme.bodySmall?.copyWith(
-              color: theme.colorScheme.onSecondaryContainer.withValues(alpha: 0.8),
+            style: TextStyle(
+              fontSize: 12,
+              color: isDark ? Colors.white70 : Colors.grey[700],
             ),
           ),
         ],
@@ -767,36 +1265,58 @@ class _Badge extends StatelessWidget {
 }
 
 class _SubmitBar extends StatelessWidget {
-  final VoidCallback onSubmitToTho;
+  final VoidCallback onSubmitToMo;
+  final VoidCallback onSaveLocal;
   final String? registerId;
-  const _SubmitBar({required this.onSubmitToTho, this.registerId});
+  const _SubmitBar({required this.onSubmitToMo, required this.onSaveLocal, this.registerId});
 
   @override
   Widget build(BuildContext context) {
-    return Row(
+    return Column(
       children: [
-        Expanded(
-          child: FilledButton.tonalIcon(
-            icon: const Icon(Icons.check_circle_outline_rounded, size: 20),
-            label: const Text('Saved Locally'),
-            style: FilledButton.styleFrom(
-              padding: const EdgeInsets.symmetric(vertical: 16),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        const Padding(
+          padding: EdgeInsets.only(bottom: 16.0),
+          child: Text(
+            '— OFFICIAL REGISTER ACTION CONTROLS —',
+            style: TextStyle(
+              fontSize: 10,
+              letterSpacing: 1.5,
+              fontWeight: FontWeight.bold,
+              color: Colors.grey,
             ),
-            onPressed: null,
           ),
         ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: FilledButton.icon(
-            icon: const Icon(Icons.send_rounded, size: 20),
-            label: const Text('Submit to THO'),
-            style: FilledButton.styleFrom(
-              padding: const EdgeInsets.symmetric(vertical: 16),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        Row(
+          children: [
+            Expanded(
+              child: OutlinedButton.icon(
+                icon: const Icon(Icons.picture_as_pdf_rounded, size: 20),
+                label: const Text('Save PDF'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: const Color(0xFF2D6A4F),
+                  side: const BorderSide(color: Color(0xFF2D6A4F)),
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                ),
+                onPressed: registerId != null ? onSaveLocal : null,
+              ),
             ),
-            onPressed: registerId != null ? onSubmitToTho : null,
-          ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: ElevatedButton.icon(
+                icon: const Icon(Icons.send_rounded, size: 20),
+                label: const Text('Send to MO'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF2D6A4F),
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  elevation: 2,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                ),
+                onPressed: registerId != null ? onSubmitToMo : null,
+              ),
+            ),
+          ],
         ),
       ],
     );

@@ -110,35 +110,67 @@ class GramNidanRegister {
   /// Display label for the register type
   String get displayName {
     const labels = {
-      'village': 'Village Survey',
-      'ec': 'Eligible Couple',
+      'pregnancy': 'Pregnancy Register',
       'anc': 'ANC Register',
-      'delivery': 'Delivery & PNC',
+      'newborn': 'Newborn (HBNC)',
       'hbnc': 'HBNC (Newborn)',
       'hbyc': 'HBYC (3-15M)',
       'child': 'Child Health',
+      'household': 'Household Survey',
+      'village': 'Village Survey',
+      'bpsugar': 'BP & Sugar (NCD)',
       'cbac': 'CBAC (NCD 30+)',
       'ncd': 'NCD Register',
       'idsp': 'IDSP / Disease',
+      'monthly': 'Monthly Report',
+      'ec': 'Eligible Couple',
+      'delivery': 'Delivery & PNC',
       'birthdeath': 'Birth & Death',
       'claim': 'JSY/JSSK Claim',
     };
-    return labels[registerType] ?? registerType;
+    return labels[registerType] ?? registerType.toUpperCase();
+  }
+
+  /// Resolved patient name (extracts from moduleData if patientName is Unknown/blank)
+  String get effectivePatientName {
+    if (patientName.isNotEmpty && patientName != 'Unknown') {
+      return patientName;
+    }
+    // Search moduleData for patient or mother name
+    for (final fields in moduleData.values) {
+      for (final entry in fields.entries) {
+        final k = entry.key.toLowerCase();
+        if ((k.contains('name') ||
+                k.contains('woman') ||
+                k.contains('mother') ||
+                k.contains('patient') ||
+                k.contains('couple')) &&
+            entry.value.trim().isNotEmpty) {
+          return entry.value.trim();
+        }
+      }
+    }
+    return 'Voice Entry';
   }
 
   /// Emoji icon for the register type
   String get icon {
     const icons = {
-      'village': '🏘️',
-      'ec': '👪',
+      'pregnancy': '🤰',
       'anc': '🤰',
-      'delivery': '🍼',
+      'newborn': '👶',
       'hbnc': '🏠',
       'hbyc': '👶',
       'child': '🧒',
+      'household': '🏘️',
+      'village': '🏘️',
+      'bpsugar': '🩺',
       'cbac': '🩺',
       'ncd': '❤️',
       'idsp': '🦟',
+      'monthly': '📊',
+      'ec': '👪',
+      'delivery': '🍼',
       'birthdeath': '📋',
       'claim': '💰',
     };
