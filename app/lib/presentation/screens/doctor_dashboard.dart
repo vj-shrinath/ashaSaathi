@@ -15,7 +15,7 @@ class DoctorDashboardScreen extends StatefulWidget {
 
 class _DoctorDashboardScreenState extends State<DoctorDashboardScreen>
     with SingleTickerProviderStateMixin {
-  _DashboardFilter _selectedFilter = _DashboardFilter.urgent;
+  _DashboardFilter _selectedFilter = _DashboardFilter.allPatients;
   bool _loadingScope = true;
   Set<String> _scopedAshaIds = {};
   String? _doctorId;
@@ -23,10 +23,12 @@ class _DoctorDashboardScreenState extends State<DoctorDashboardScreen>
   String? _phcName;
   final TextEditingController _searchController = TextEditingController();
   String _searchQuery = '';
+  late final Stream<List<TriageReport>> _triageStream;
 
   @override
   void initState() {
     super.initState();
+    _triageStream = FirebaseService.watchTriageReports();
     _loadDoctorScope();
     _searchController.addListener(() {
       setState(() {
@@ -214,6 +216,7 @@ class _DoctorDashboardScreenState extends State<DoctorDashboardScreen>
 
                     // 3. Triage Risk Summary Grid
                     _SummaryGrid(
+                      stream: _triageStream,
                       selectedFilter: _selectedFilter,
                       onSelected: (filter) => setState(() => _selectedFilter = filter),
                       myAshaIds: _scopedAshaIds,
@@ -277,6 +280,7 @@ class _DoctorDashboardScreenState extends State<DoctorDashboardScreen>
 
                     // 6. Patient Feed Content List
                     _PatientFeedPanel(
+                      stream: _triageStream,
                       filter: _selectedFilter,
                       myAshaIds: _scopedAshaIds,
                       doctorId: _doctorId,
@@ -704,11 +708,13 @@ class _SearchBar extends StatelessWidget {
 // SUMMARY GRID
 // ─────────────────────────────────────────────────────────────────────────────
 class _SummaryGrid extends StatelessWidget {
+  final Stream<List<TriageReport>> stream;
   final _DashboardFilter selectedFilter;
   final ValueChanged<_DashboardFilter> onSelected;
   final Set<String> myAshaIds;
 
   const _SummaryGrid({
+    required this.stream,
     required this.selectedFilter,
     required this.onSelected,
     required this.myAshaIds,
@@ -717,8 +723,9 @@ class _SummaryGrid extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<List<TriageReport>>(
-      stream: FirebaseService.watchTriageReports(),
+      stream: stream,
       builder: (context, snapshot) {
+        final isLoading = snapshot.connectionState == ConnectionState.waiting && !snapshot.hasData;
         final rawReports = snapshot.data ?? [];
         final reports = myAshaIds.isNotEmpty
             ? rawReports.where((r) => myAshaIds.contains(r.ashaId)).toList()
@@ -733,6 +740,11 @@ class _SummaryGrid extends StatelessWidget {
         final yellow = unique.where((r) => r.triageResult.riskCategory == 'Yellow').length;
         final green = unique.where((r) => r.triageResult.riskCategory == 'Green').length;
 
+        final urgentVal = isLoading ? '...' : '${red + orange}';
+        final monitorVal = isLoading ? '...' : '$yellow';
+        final stableVal = isLoading ? '...' : '$green';
+        final totalVal = isLoading ? '...' : '${unique.length}';
+
         return GridView.count(
           crossAxisCount: 2,
           shrinkWrap: true,
@@ -743,7 +755,7 @@ class _SummaryGrid extends StatelessWidget {
           children: [
             _StatCard(
               label: 'Urgent Cases',
-              value: '${red + orange}',
+              value: urgentVal,
               subLabel: '$red Critical • $orange High',
               color: const Color(0xFFEF4444),
               bgColor: const Color(0xFFFEF2F2),
@@ -753,7 +765,7 @@ class _SummaryGrid extends StatelessWidget {
             ),
             _StatCard(
               label: 'Needs Monitor',
-              value: '$yellow',
+              value: monitorVal,
               subLabel: 'Moderate Risk',
               color: const Color(0xFFD97706),
               bgColor: const Color(0xFFFEF3C7),
@@ -763,7 +775,7 @@ class _SummaryGrid extends StatelessWidget {
             ),
             _StatCard(
               label: 'Stable Patients',
-              value: '$green',
+              value: stableVal,
               subLabel: 'Low Risk Queue',
               color: const Color(0xFF10B981),
               bgColor: const Color(0xFFECFDF5),
@@ -773,7 +785,7 @@ class _SummaryGrid extends StatelessWidget {
             ),
             _StatCard(
               label: 'Total Patients',
-              value: '${unique.length}',
+              value: totalVal,
               subLabel: 'All Triage Cases',
               color: const Color(0xFF0F4C81),
               bgColor: const Color(0xFFF0F9FF),
@@ -976,12 +988,14 @@ class _SectionPills extends StatelessWidget {
 // PATIENT FEED PANEL
 // ─────────────────────────────────────────────────────────────────────────────
 class _PatientFeedPanel extends StatelessWidget {
+  final Stream<List<TriageReport>> stream;
   final _DashboardFilter filter;
   final Set<String> myAshaIds;
   final String? doctorId;
   final String searchQuery;
 
   const _PatientFeedPanel({
+    required this.stream,
     required this.filter,
     required this.myAshaIds,
     required this.doctorId,
@@ -991,7 +1005,7 @@ class _PatientFeedPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (filter == _DashboardFilter.pending) {
-      return _PendingReviewTab(myAshaIds: myAshaIds, searchQuery: searchQuery);
+      return _PendingReviewTab(stream: stream, myAshaIds: myAshaIds, searchQuery: searchQuery);
     }
     if (filter == _DashboardFilter.prescriptions) {
       return _PrescriptionsTab(doctorId: doctorId, searchQuery: searchQuery);
@@ -1001,7 +1015,7 @@ class _PatientFeedPanel extends StatelessWidget {
     }
 
     return StreamBuilder<List<TriageReport>>(
-      stream: FirebaseService.watchTriageReports(),
+      stream: stream,
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting && !snapshot.hasData) {
           return const Padding(
@@ -1438,10 +1452,12 @@ class _PatientTriageTile extends StatelessWidget {
 // PENDING REVIEW TAB
 // ─────────────────────────────────────────────────────────────────────────────
 class _PendingReviewTab extends StatelessWidget {
+  final Stream<List<TriageReport>> stream;
   final Set<String> myAshaIds;
   final String searchQuery;
 
   const _PendingReviewTab({
+    required this.stream,
     required this.myAshaIds,
     required this.searchQuery,
   });
@@ -1449,7 +1465,7 @@ class _PendingReviewTab extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<List<TriageReport>>(
-      stream: FirebaseService.watchTriageReports(),
+      stream: stream,
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting && !snapshot.hasData) {
           return const Padding(

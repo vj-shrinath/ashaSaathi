@@ -16,10 +16,12 @@ class _DoctorPatientListScreenState extends State<DoctorPatientListScreen>
   late TabController _tabController;
   Set<String> _scopedAshaIds = {};
   bool _isLoading = true;
+  late final Stream<List<TriageReport>> _triageStream;
 
   @override
   void initState() {
     super.initState();
+    _triageStream = FirebaseService.watchTriageReports();
     _tabController = TabController(length: 3, vsync: this);
     _loadDoctorScope();
   }
@@ -109,14 +111,17 @@ class _DoctorPatientListScreenState extends State<DoctorPatientListScreen>
         controller: _tabController,
         children: [
           _PatientListTab(
+            stream: _triageStream,
             ashaIds: _scopedAshaIds,
             filter: _DashboardFilter.urgent,
           ),
           _PatientListTab(
+            stream: _triageStream,
             ashaIds: _scopedAshaIds,
             filter: _DashboardFilter.monitor,
           ),
           _PatientListTab(
+            stream: _triageStream,
             ashaIds: _scopedAshaIds,
             filter: _DashboardFilter.allPatients,
           ),
@@ -136,10 +141,12 @@ enum _DashboardFilter {
 }
 
 class _PatientListTab extends StatelessWidget {
+  final Stream<List<TriageReport>> stream;
   final Set<String> ashaIds;
   final _DashboardFilter filter;
 
   const _PatientListTab({
+    required this.stream,
     required this.ashaIds,
     required this.filter,
   });
@@ -147,7 +154,7 @@ class _PatientListTab extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<List<TriageReport>>(
-      stream: FirebaseService.watchTriageReports(),
+      stream: stream,
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting && !snapshot.hasData) {
           return const Center(child: CircularProgressIndicator());
