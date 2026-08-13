@@ -395,6 +395,8 @@ router.post('/register-worker', requireAdmin, async (req: Request, res: Response
     return;
   }
 
+  const normalizedEmail = String(email).trim().toLowerCase();
+
   // Generate an easy, memorable 8-character temporary password (e.g. Asha8294)
   const tempPassword = 'Asha' + Math.floor(1000 + Math.random() * 9000).toString();
 
